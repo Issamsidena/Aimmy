@@ -5,6 +5,7 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Shapes;
+using Aimmy2.Class;
 using Aimmy2.Theme;
 
 namespace Aimmy2.UILibrary
@@ -250,9 +251,7 @@ namespace Aimmy2.UILibrary
             // Use ThemeManager to set and save the color
             ThemeManager.SetThemeColor(color);
 
-            // Save to settings (implement your settings save logic here)
-            string hexColor = ThemeManager.GetThemeColorHex();
-            // Settings.SaveThemeColor(hexColor);
+            Dictionary.colorState["Theme Color"] = ThemeManager.GetThemeColorHex();
         }
 
         private void PositionSelectorForColor(Color color)

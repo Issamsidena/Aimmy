@@ -42,16 +42,26 @@ namespace Aimmy2
 
         private void InitializeTheme()
         {
+            const string fallbackHex = "#FF722ED1";
             try
             {
-                // Keep startup theme stable and predictable.
-                ThemeManager.SetThemeColor("#FF722ED1");
+                SaveDictionary.EnsureDirectoriesExist();
+                SaveDictionary.LoadJSON(Dictionary.colorState, "bin\\colors.cfg");
+
+                if (Dictionary.colorState.TryGetValue("Theme Color", out var saved) &&
+                    saved != null &&
+                    !string.IsNullOrWhiteSpace(saved.ToString()))
+                {
+                    ThemeManager.SetThemeColor(saved.ToString()!.Trim());
+                    return;
+                }
             }
-            catch (Exception ex)
+            catch
             {
-                // Log error and use default color
-                ThemeManager.SetThemeColor("#FF722ED1");
+                // Fall through to default
             }
+
+            ThemeManager.SetThemeColor(fallbackHex);
         }
     }
 }

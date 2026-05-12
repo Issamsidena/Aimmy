@@ -251,10 +251,32 @@ namespace Aimmy2
 
         private void ApplyThemeColorFromConfig()
         {
-            // Force purple theme on startup for stable visuals.
-            const string defaultThemeColor = "#FF722ED1";
-            Dictionary.colorState["Theme Color"] = defaultThemeColor;
-            ThemeManager.SetThemeColor(defaultThemeColor);
+            const string fallbackHex = "#FF722ED1";
+
+            if (!Dictionary.colorState.TryGetValue("Theme Color", out var saved) ||
+                saved == null ||
+                string.IsNullOrWhiteSpace(saved.ToString()))
+            {
+                Dictionary.colorState["Theme Color"] = fallbackHex;
+                ThemeManager.SetThemeColor(fallbackHex);
+                ApplyThemeGradients();
+                return;
+            }
+
+            var hex = saved.ToString()!.Trim();
+            try
+            {
+                var color = (Color)ColorConverter.ConvertFromString(hex)!;
+                ThemeManager.SetThemeColor(color);
+                Dictionary.colorState["Theme Color"] = ThemeManager.GetThemeColorHex();
+            }
+            catch
+            {
+                Dictionary.colorState["Theme Color"] = fallbackHex;
+                ThemeManager.SetThemeColor(fallbackHex);
+            }
+
+            ApplyThemeGradients();
         }
 
         private void SetupKeybindings()
