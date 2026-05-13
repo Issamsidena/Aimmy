@@ -2,7 +2,10 @@
 > [!NOTE]
 > If you enjoy Aimmy, please consider giving us a star ⭐! We appreciate it! :)
   <p>
-    <img width="1920" height="1080" alt="AimmyV2Banner" src="https://github.com/user-attachments/assets/e7caa85a-9f1b-48e6-9fe5-7dfb47359625" />
+    <a href="https://aimmy.dev/" target="_blank">
+      <img width="100%" src="readme_assets/AimmyV2Banner.png"></a>
+  </p>
+
 Aimmy is a universal AI-Based Aim Alignment Mechanism developed by BabyHamsta, MarsQQ & Taylor to make gaming more accessible for users who have difficulty aiming.
 
 Unlike most AI-Based Aim Alignment Mechanisms, Aimmy utilizes DirectML, ONNX, and YOLOV8 to detect players, offering both higher accuracy and faster performance compared to other Aim Aligners, especially on AMD GPUs, which would not perform well on Aim Alignment Mechanisms that utilize TensorRT.
