@@ -2,7 +2,10 @@
 > [!NOTE]
 > If you enjoy Aimmy, please consider giving us a star ⭐! We appreciate it! :)
   <p>
-    <img width="1920" height="1080" alt="AimmyV2Banner" src="https://github.com/user-attachments/assets/e7caa85a-9f1b-48e6-9fe5-7dfb47359625" />
+    <a href="https://aimmy.dev/" target="_blank">
+      <img width="100%" src="readme_assets/AimmyV2Banner.png"></a>
+  </p>
+
 Aimmy is a universal AI-Based Aim Alignment Mechanism developed by BabyHamsta, MarsQQ & Taylor to make gaming more accessible for users who have difficulty aiming.
 
 Unlike most AI-Based Aim Alignment Mechanisms, Aimmy utilizes DirectML, ONNX, and YOLOV8 to detect players, offering both higher accuracy and faster performance compared to other Aim Aligners, especially on AMD GPUs, which would not perform well on Aim Alignment Mechanisms that utilize TensorRT.
@@ -87,7 +90,7 @@ When you press the trigger binding, Aimmy will capture the screen and run the im
 ## How is Aimmy better than similar AI-Based tools?
 Aimmy is written in C# using .NET 8 and WPF utilizing pre-existing libraries like DirectML and ONNX. This has allowed us to make a very fast Aim Aligner with high compatiblity on both AMD and NVIDIA GPUs without sacrificing the end-user experience.
 
-<img src="readme_assets/UI.gif" alt="UI Overview" width="400"/>
+![Example of Model switching](readme_assets/UI.gif?raw=true)
 
 Beyond the core functionality, Aimmy also adds some amazing additional features like Detection ESP to help you tune your gaming experience however you like it.
 
