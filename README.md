@@ -90,7 +90,7 @@ When you press the trigger binding, Aimmy will capture the screen and run the im
 ## How is Aimmy better than similar AI-Based tools?
 Aimmy is written in C# using .NET 8 and WPF utilizing pre-existing libraries like DirectML and ONNX. This has allowed us to make a very fast Aim Aligner with high compatiblity on both AMD and NVIDIA GPUs without sacrificing the end-user experience.
 
-![Example of Model switching](readme_assets/UI.gif?raw=true)
+<img src="readme_assets/UI.gif" alt="UI Overview" width="400"/>
 
 Beyond the core functionality, Aimmy also adds some amazing additional features like Detection ESP to help you tune your gaming experience however you like it.
 
