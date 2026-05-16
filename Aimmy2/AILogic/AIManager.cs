@@ -21,7 +21,7 @@ namespace Aimmy2.AILogic
         #region Variables
 
         private const int IMAGE_SIZE = 640;
-        private const int NUM_DETECTIONS = 8400; // Standard for OnnxV8 model (Shape: 1x5x8400)
+        private const int NUM_DETECTIONS = 8400; // Standard for OnnxV8 model (Shape: 1x(4+nc)x8400)
         private const int SAVE_FRAME_COOLDOWN_MS = 500;
 
         private DateTime lastSavedTime = DateTime.MinValue;
@@ -50,6 +50,7 @@ namespace Aimmy2.AILogic
 
         private Thread? _aiLoopThread;
         private volatile bool _isAiLoopRunning;
+        private int _modelOutputNumClasses = 1;
 
         // For Auto-Labelling Data System
         private bool PlayerFound = false;
@@ -267,6 +268,7 @@ namespace Aimmy2.AILogic
 
                 // Validate the onnx model output shape (ensure model is OnnxV8)
                 ValidateOnnxShape();
+                ModelClassLabels.LoadFromDefaultPath();
 
                 // Pre-allocate bitmap buffer
                 _bitmapBuffer = new byte[3 * IMAGE_SIZE * IMAGE_SIZE];
@@ -290,19 +292,33 @@ namespace Aimmy2.AILogic
 
         private void ValidateOnnxShape()
         {
-            var expectedShape = new int[] { 1, 5, NUM_DETECTIONS };
-            if (_onnxModel != null)
+            if (_onnxModel == null) return;
+
+            var outputMetadata = _onnxModel.OutputMetadata.Values.FirstOrDefault();
+            if (outputMetadata == null) return;
+
+            var dims = outputMetadata.Dimensions;
+            bool valid = dims.Length == 3
+                         && dims[0] == 1
+                         && dims[2] == NUM_DETECTIONS
+                         && dims[1] >= 5;
+
+            if (!valid)
             {
-                var outputMetadata = _onnxModel.OutputMetadata;
-                if (!outputMetadata.Values.All(metadata => metadata.Dimensions.SequenceEqual(expectedShape)))
-                {
-                    Application.Current.Dispatcher.BeginInvoke(new Action(() =>
+                Application.Current.Dispatcher.BeginInvoke(new Action(() =>
                     new NoticeBar(
-                        $"Output shape does not match the expected shape of {string.Join("x", expectedShape)}.\n\nThis model will not work with Aimmy, please use an YOLOv8 model converted to ONNXv8."
-                        , 15000)
-                    .Show()
-                    ));
-                }
+                        $"Output shape {string.Join("x", dims)} is not supported.\n\nUse a YOLOv8 ONNXv8 model with shape 1x(4+classes)x{NUM_DETECTIONS} (e.g. 1x5x8400 or 1x6x8400 for Head+Player).",
+                        15000).Show()));
+                return;
+            }
+
+            _modelOutputNumClasses = Math.Max(1, dims[1] - 4);
+            if (_modelOutputNumClasses < ModelClassLabels.Labels.Count)
+            {
+                Application.Current.Dispatcher.BeginInvoke(new Action(() =>
+                    new NoticeBar(
+                        $"Model has {_modelOutputNumClasses} class channel(s) but labels.txt lists {ModelClassLabels.Labels.Count}. Head/Player filtering may be wrong — check bin\\labels\\labels.txt.",
+                        10000).Show()));
             }
         }
 
@@ -598,7 +614,7 @@ namespace Aimmy2.AILogic
 
             if (Dictionary.toggleState["Y Axis Percentage Adjustment"])
             {
-                detectedY = (int)((rect.Y + rect.Height - (rect.Height * (YOffsetPercentage / 100))) * scaleY + YOffset);
+                detectedY = (int)(GetTargetClassAimY(rect, YOffsetPercentage) * scaleY + YOffset);
             }
             else
             {
@@ -606,29 +622,59 @@ namespace Aimmy2.AILogic
             }
         }
 
+        /// <summary>Head = upper head region. Player = body center. Smart Detection = user alignment setting.</summary>
+        private static float GetTargetClassAimY(RectangleF rect, double yOffsetPercentage)
+        {
+            switch (GetTargetClassFilterMode())
+            {
+                case "Head":
+                    return rect.Y + rect.Height * 0.12f;
+                case "Player":
+                    return rect.Y + rect.Height / 2f;
+                default:
+                    return rect.Y + rect.Height - (rect.Height * (float)(yOffsetPercentage / 100.0));
+            }
+        }
+
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static int CalculateDetectedY(float scaleY, double YOffset, Prediction closestPrediction)
+        private int CalculateDetectedY(float scaleY, double YOffset, Prediction closestPrediction)
         {
             var rect = closestPrediction.Rectangle;
-            float yBase = rect.Y;
-            float yAdjustment = 0;
+            float aimY;
 
-            switch (Dictionary.dropdownState["Aiming Boundaries Alignment"])
+            switch (GetTargetClassFilterMode())
             {
-                case "Center":
-                    yAdjustment = rect.Height / 2;
+                case "Head":
+                    aimY = rect.Y + rect.Height * 0.12f;
                     break;
+                case "Player":
+                    aimY = rect.Y + rect.Height / 2f;
+                    break;
+                default:
+                {
+                    float yBase = rect.Y;
+                    float yAdjustment = 0;
 
-                case "Top":
-                    // yBase is already at the top
-                    break;
+                    switch (Dictionary.dropdownState["Aiming Boundaries Alignment"])
+                    {
+                        case "Center":
+                            yAdjustment = rect.Height / 2;
+                            break;
 
-                case "Bottom":
-                    yAdjustment = rect.Height;
+                        case "Top":
+                            break;
+
+                        case "Bottom":
+                            yAdjustment = rect.Height;
+                            break;
+                    }
+
+                    aimY = yBase + yAdjustment;
                     break;
+                }
             }
 
-            return (int)((yBase + yAdjustment) * scaleY + YOffset);
+            return (int)(aimY * scaleY + YOffset);
         }
 
         private void HandleAim(Prediction closestPrediction)
@@ -792,40 +838,22 @@ namespace Aimmy2.AILogic
                 return null;
             }
 
-            Prediction? bestCandidate = null;
-            double bestDistSq = double.MaxValue;
-            float bestConfidence = float.MinValue;
-            double center = IMAGE_SIZE / 2.0;
-            string targetClassMode = Dictionary.dropdownState.TryGetValue("Target Class", out var targetClassValue)
-                ? targetClassValue?.ToString() ?? "Best Confidence"
-                : "Best Confidence";
-            using (Benchmark("KDTreeOperations"))
+            var filteredPredictions = FilterPredictionsByTargetClass(KDPredictions);
+            if (filteredPredictions.Count == 0)
             {
-                foreach (var p in KDPredictions)
-                {
-                    if (targetClassMode == "Closest Detection")
-                    {
-                        var dx = p.ScreenCenterX - center;
-                        var dy = p.ScreenCenterY - center;
-                        double d2 = dx * dx + dy * dy;
-                        if (d2 < bestDistSq)
-                        {
-                            bestDistSq = d2;
-                            bestCandidate = p;
-                        }
-                    }
-                    else
-                    {
-                        if (p.Confidence > bestConfidence)
-                        {
-                            bestConfidence = p.Confidence;
-                            bestCandidate = p;
-                        }
-                    }
-                }
+                return null;
             }
 
-            Prediction? finalTarget = HandleStickyAim(bestCandidate, KDPredictions);
+            float crosshairX = IMAGE_SIZE / 2f;
+            float crosshairY = IMAGE_SIZE / 2f;
+            string targetPriorityMode = GetTargetPriorityMode();
+            Prediction? bestCandidate;
+            using (Benchmark("KDTreeOperations"))
+            {
+                bestCandidate = SelectBestPredictionByTargetClass(filteredPredictions, targetPriorityMode, crosshairX, crosshairY);
+            }
+
+            Prediction? finalTarget = HandleStickyAim(bestCandidate, filteredPredictions);
             if (finalTarget != null)
             {
                 // Translate coordinates
@@ -875,37 +903,11 @@ namespace Aimmy2.AILogic
             float screenCenterX = IMAGE_SIZE / 2f;
             float screenCenterY = IMAGE_SIZE / 2f;
 
-            Prediction? aimTarget = null;
-            float nearestToCrosshairDistSq = float.MaxValue;
-            float bestConfidence = float.MinValue;
-            string targetClassMode = Dictionary.dropdownState.TryGetValue("Target Class", out var targetClassValue)
-                ? targetClassValue?.ToString() ?? "Best Confidence"
-                : "Best Confidence";
-            foreach (var candidate in predictions)
-            {
-                float distSq = GetDistanceSq(candidate.ScreenCenterX, candidate.ScreenCenterY, screenCenterX, screenCenterY);
-                if (targetClassMode == "Closest Detection")
-                {
-                    if (distSq < nearestToCrosshairDistSq)
-                    {
-                        nearestToCrosshairDistSq = distSq;
-                        aimTarget = candidate;
-                    }
-                }
-                else
-                {
-                    if (candidate.Confidence > bestConfidence)
-                    {
-                        bestConfidence = candidate.Confidence;
-                        aimTarget = candidate;
-                    }
-                }
-            }
-
-            if (targetClassMode != "Closest Detection" && aimTarget != null)
-            {
-                nearestToCrosshairDistSq = GetDistanceSq(aimTarget.ScreenCenterX, aimTarget.ScreenCenterY, screenCenterX, screenCenterY);
-            }
+            string targetPriorityMode = GetTargetPriorityMode();
+            Prediction? aimTarget = SelectBestPredictionByTargetClass(predictions, targetPriorityMode, screenCenterX, screenCenterY);
+            float nearestToCrosshairDistSq = aimTarget == null
+                ? float.MaxValue
+                : GetDistanceSq(aimTarget.ScreenCenterX, aimTarget.ScreenCenterY, screenCenterX, screenCenterY);
 
             if (aimTarget == null)
             {
@@ -955,6 +957,152 @@ namespace Aimmy2.AILogic
             float dx = x1 - x2;
             float dy = y1 - y2;
             return dx * dx + dy * dy;
+        }
+
+        private static string GetTargetPriorityMode()
+        {
+            if (!Dictionary.dropdownState.TryGetValue("Target Priority", out var value))
+                return "Best Confidence";
+
+            return NormalizeTargetPriorityMode(value?.ToString());
+        }
+
+        private static string GetTargetClassFilterMode()
+        {
+            if (!Dictionary.dropdownState.TryGetValue("Target Class", out var value))
+                return "Smart Detection";
+
+            var mode = value?.ToString()?.Trim() ?? "Smart Detection";
+            return mode == "Best Confidence" ? "Smart Detection" : mode;
+        }
+
+        private List<Prediction> FilterPredictionsByTargetClass(List<Prediction> predictions)
+        {
+            string mode = GetTargetClassFilterMode();
+            if (mode == "Smart Detection")
+                return predictions;
+
+            if (_modelOutputNumClasses > 1)
+            {
+                var filtered = new List<Prediction>(predictions.Count);
+                foreach (var prediction in predictions)
+                {
+                    if (PredictionMatchesTargetClass(prediction, mode))
+                        filtered.Add(prediction);
+                }
+
+                if (filtered.Count > 0)
+                    return filtered;
+            }
+
+            // Single-class or no class hits: keep all enemy boxes; Head/Player aim point handles focus.
+            return ApplyTargetClassSizeHeuristic(predictions, mode);
+        }
+
+        /// <summary>When classes are not split in the model, prefer small boxes for Head and large for Player.</summary>
+        private static List<Prediction> ApplyTargetClassSizeHeuristic(List<Prediction> predictions, string mode)
+        {
+            if (predictions.Count <= 1)
+                return predictions;
+
+            if (mode == "Head")
+            {
+                float minArea = predictions.Min(p => p.Rectangle.Width * p.Rectangle.Height);
+                float areaThreshold = minArea * 2.5f;
+                var headSized = predictions.Where(p => p.Rectangle.Width * p.Rectangle.Height <= areaThreshold).ToList();
+                return headSized.Count > 0 ? headSized : predictions;
+            }
+
+            if (mode == "Player")
+            {
+                float maxArea = predictions.Max(p => p.Rectangle.Width * p.Rectangle.Height);
+                float areaThreshold = maxArea / 2.5f;
+                var bodySized = predictions.Where(p => p.Rectangle.Width * p.Rectangle.Height >= areaThreshold).ToList();
+                return bodySized.Count > 0 ? bodySized : predictions;
+            }
+
+            return predictions;
+        }
+
+        private static bool PredictionMatchesTargetClass(Prediction prediction, string mode)
+        {
+            if (string.Equals(prediction.ClassName, mode, StringComparison.OrdinalIgnoreCase))
+                return true;
+
+            int? classIndex = ModelClassLabels.GetIndexByName(mode);
+            return classIndex.HasValue && prediction.ClassIndex == classIndex.Value;
+        }
+
+        /// <summary>Maps legacy saved value "Closest Detection" to "Closest Distance".</summary>
+        private static string NormalizeTargetPriorityMode(string? mode)
+        {
+            var m = string.IsNullOrWhiteSpace(mode) ? "Best Confidence" : mode.Trim();
+            return m == "Closest Detection" ? "Closest Distance" : m;
+        }
+
+        /// <summary>Distance from crosshair to the nearest point on an enemy box (0 if crosshair is on/over that enemy).</summary>
+        private static float GetCrosshairToBoxDistanceSq(Prediction p, float crosshairX, float crosshairY)
+        {
+            var r = p.Rectangle;
+            float nearestX = Math.Clamp(crosshairX, r.X, r.X + r.Width);
+            float nearestY = Math.Clamp(crosshairY, r.Y, r.Y + r.Height);
+            return GetDistanceSq(crosshairX, crosshairY, nearestX, nearestY);
+        }
+
+        /// <summary>
+        /// Best Confidence = highest score.
+        /// Closest Distance = largest detection box (near/large vs far/small on screen).
+        /// Closest Crosshair = enemy whose box is nearest to the crosshair (e.g. 5 cm vs 11 cm → pick 5 cm).
+        /// </summary>
+        private static Prediction? SelectBestPredictionByTargetClass(
+            IEnumerable<Prediction> predictions,
+            string targetClassMode,
+            float crosshairX,
+            float crosshairY)
+        {
+            string mode = NormalizeTargetPriorityMode(targetClassMode);
+            Prediction? best = null;
+            double bestCrosshairDistSq = double.MaxValue;
+            float bestBoxArea = float.MinValue;
+            float bestConfidence = float.MinValue;
+
+            foreach (var p in predictions)
+            {
+                switch (mode)
+                {
+                    case "Closest Crosshair":
+                    {
+                        float d2 = GetCrosshairToBoxDistanceSq(p, crosshairX, crosshairY);
+                        if (d2 < bestCrosshairDistSq)
+                        {
+                            bestCrosshairDistSq = d2;
+                            best = p;
+                        }
+                        break;
+                    }
+                    case "Closest Distance":
+                    {
+                        float area = p.Rectangle.Width * p.Rectangle.Height;
+                        if (area > bestBoxArea)
+                        {
+                            bestBoxArea = area;
+                            best = p;
+                        }
+                        break;
+                    }
+                    default:
+                    {
+                        if (p.Confidence > bestConfidence)
+                        {
+                            bestConfidence = p.Confidence;
+                            best = p;
+                        }
+                        break;
+                    }
+                }
+            }
+
+            return best;
         }
 
         private Prediction? HandleNoDetections()
@@ -1016,15 +1164,32 @@ namespace Aimmy2.AILogic
             var KDpoints = new List<double[]>(100); // Pre-allocate with estimated capacity
             var KDpredictions = new List<Prediction>(100);
 
+            int numChannels = outputTensor.Dimensions[1];
+            int numClasses = Math.Max(1, numChannels - 4);
+
             for (int i = 0; i < NUM_DETECTIONS; i++)
             {
-                float objectness = outputTensor[0, 4, i];
-                if (objectness < minConfidence) continue;
-
                 float x_center = outputTensor[0, 0, i];
                 float y_center = outputTensor[0, 1, i];
                 float width = outputTensor[0, 2, i];
                 float height = outputTensor[0, 3, i];
+
+                int classIndex = 0;
+                float confidence = outputTensor[0, 4, i];
+                if (numClasses > 1)
+                {
+                    for (int c = 1; c < numClasses; c++)
+                    {
+                        float classScore = outputTensor[0, 4 + c, i];
+                        if (classScore > confidence)
+                        {
+                            confidence = classScore;
+                            classIndex = c;
+                        }
+                    }
+                }
+
+                if (confidence < minConfidence) continue;
 
                 float x_min = x_center - width / 2;
                 float y_min = y_center - height / 2;
@@ -1037,7 +1202,9 @@ namespace Aimmy2.AILogic
                 Prediction prediction = new()
                 {
                     Rectangle = rect,
-                    Confidence = objectness,
+                    Confidence = confidence,
+                    ClassIndex = classIndex,
+                    ClassName = ModelClassLabels.GetLabel(classIndex),
                     CenterXTranslated = x_center / IMAGE_SIZE,
                     CenterYTranslated = y_center / IMAGE_SIZE,
                     ScreenCenterX = x_center,
@@ -1198,6 +1365,8 @@ namespace Aimmy2.AILogic
         {
             public RectangleF Rectangle { get; set; }
             public float Confidence { get; set; }
+            public int ClassIndex { get; set; }
+            public string ClassName { get; set; } = "";
             public float CenterXTranslated { get; set; }
             public float CenterYTranslated { get; set; }
             public float ScreenCenterX { get; set; }

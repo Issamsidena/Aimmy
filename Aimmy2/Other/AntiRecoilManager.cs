@@ -86,7 +86,8 @@ namespace Other
                         // dt-driven recoil: value controls movement per second; FPS/timer jitter won't change speed.
                         double dtSeconds = (now - _lastUpdateTimestamp) / (double)Stopwatch.Frequency;
                         _lastUpdateTimestamp = now;
-                        MouseManager.DoAntiRecoil(dtSeconds);
+                        double sustainedAfterDelaySec = Math.Max(0.0, (holdElapsedMs - holdTimeMs) / 1000.0);
+                        MouseManager.DoAntiRecoil(dtSeconds, sustainedAfterDelaySec);
                     }
                     else
                     {

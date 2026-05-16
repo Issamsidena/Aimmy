@@ -1,4 +1,4 @@
-﻿using Aimmy2.Class;
+using Aimmy2.Class;
 using Aimmy2.Theme;
 using AimmyWPF.Class;
 using Class;
@@ -67,7 +67,7 @@ namespace Visuality
 
         private void WriteJSON()
         {
-            SaveDictionary.WriteJSON(Dictionary.sliderSettings, $"bin\\configs\\{ConfigNameTextbox.Text}.cfg", RecommendedModelNameTextBox.Text, ExtraStrings);
+            SaveDictionary.WriteJSON(ConfigPersistence.BuildMainSliderConfigForSave(RecommendedModelNameTextBox.Text, ExtraStrings), $"bin\\configs\\{ConfigNameTextbox.Text}.cfg");
             new NoticeBar("Config has been saved to bin/configs.", 4000).Show();
             Close();
         }

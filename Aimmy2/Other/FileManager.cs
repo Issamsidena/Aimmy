@@ -126,7 +126,6 @@ namespace Other
 
             string configPath = Path.Combine("bin/configs", selectedConfig);
 
-            SaveDictionary.LoadJSON(Dictionary.sliderSettings, configPath);
             PropertyChanger.PostNewConfig(configPath, true);
 
             SelectedConfigNotifier.Content = "Loaded Config: " + selectedConfig;

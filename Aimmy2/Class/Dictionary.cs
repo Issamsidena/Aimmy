@@ -18,7 +18,7 @@ namespace Aimmy2.Class
             { "Emergency Stop Keybind", "Delete"},
             { "Model Switch Keybind", "OemPipe"},
             { "Anti Recoil Keybind", "Left"},
-            { "Disable Anti Recoil Keybind", "Oem6"},
+            { "Disable Anti Recoil Keybind", "End"},
             { "Gun 1 Key", "D1"},
             { "Gun 2 Key", "D2"},
             { "Gun 3 Key", "D3"},
@@ -62,6 +62,7 @@ namespace Aimmy2.Class
             { "Enable Gun Switching Keybind", false },
             { "Auto Trigger", false },
             { "Anti Recoil", false },
+            { "Adaptive Recoil", false },
             { "FOV", false },
             { "Dynamic FOV", false },
             { "Third Person Support", false },
@@ -104,7 +105,8 @@ namespace Aimmy2.Class
             { "Prediction Method", "Kalman Filter" },
             { "Detection Area Type", "Closest to Center Screen" },
             { "Aiming Boundaries Alignment", "Center" },
-            { "Target Class", "Best Confidence" },
+            { "Target Priority", "Best Confidence" },
+            { "Target Class", "Smart Detection" },
             { "Movement Path", "Cubic Bezier" },
             { "Mouse Movement Method", "Mouse Event" },
             { "Screen Capture Method", "DirectX" },
@@ -124,7 +126,16 @@ namespace Aimmy2.Class
             { "Hold Time", 1.0 },
             { "Fire Rate", 1.0 },
             { "Y Recoil (Up/Down)", 0.00 },
-            { "X Recoil (Left/Right)", 0.00 }
+            { "X Recoil (Left/Right)", 0.00 },
+            { "Adaptive Recoil", false },
+            { "Drift Compensation X (Left/Right)", 0.0 },
+            { "Drift Compensation X Speed", 1.0 },
+            { "Drift Compensation Y (Up/Down)", 0.0 },
+            { "Drift Compensation Y Speed", 1.0 },
+            { "Spray Fade X", 0.0 },
+            { "Spray Fade Y", 0.0 },
+            { "Spray Fade X Speed", 1.0 },
+            { "Spray Fade Y Speed", 1.0 }
         };
 
         public static Dictionary<string, dynamic> filelocationState = new()

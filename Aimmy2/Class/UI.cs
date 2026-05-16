@@ -33,6 +33,7 @@ namespace Class
         public ADropdown? D_DetectionAreaType { get; set; }
         public ComboBoxItem? DDI_ClosestToCenterScreen { get; set; }
         public ADropdown? D_AimingBoundariesAlignment { get; set; }
+        public ADropdown? D_TargetPriority { get; set; }
         public ADropdown? D_TargetClass { get; set; }
         public ASlider? S_MouseSensitivity { get; set; }
         public ASlider? S_MouseJitter { get; set; }
@@ -65,6 +66,16 @@ namespace Class
         public ASlider? S_FireRate { get; set; }
         public ASlider? S_YAntiRecoilAdjustment { get; set; }
         public ASlider? S_XAntiRecoilAdjustment { get; set; }
+        public AToggle? T_AdaptiveRecoil { get; set; }
+        public StackPanel? P_AdaptiveRecoilOptions { get; set; }
+        public ASlider? S_DriftCompensationX { get; set; }
+        public ASlider? S_DriftCompensationXSpeed { get; set; }
+        public ASlider? S_DriftCompensationY { get; set; }
+        public ASlider? S_DriftCompensationYSpeed { get; set; }
+        public ASlider? S_SprayFadeX { get; set; }
+        public ASlider? S_SprayFadeY { get; set; }
+        public ASlider? S_SprayFadeXSpeed { get; set; }
+        public ASlider? S_SprayFadeYSpeed { get; set; }
 
         // Anti Recoil Config
         public ATitle? AT_AntiRecoilConfig { get; set; }

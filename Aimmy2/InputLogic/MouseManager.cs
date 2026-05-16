@@ -278,12 +278,15 @@ namespace InputLogic
             return Math.Clamp(multiplier, 0.25, 10.0);
         }
 
+        private static double ReadAntiRecoilDouble(string key, double defaultValue) =>
+            Dictionary.AntiRecoilSettings.TryGetValue(key, out var v) ? Convert.ToDouble(v) : defaultValue;
+
         /// <summary>
         /// Apply anti-recoil using dt-based linear scaling.
         /// Slider values are passed through a progressive curve then interpreted as pixels-per-second
         /// (or equivalent mouse units per second).
         /// </summary>
-        public static void DoAntiRecoil(double dtSeconds)
+        public static void DoAntiRecoil(double dtSeconds, double sustainedAfterDelaySec = 0.0)
         {
             if (dtSeconds <= 0)
                 return;
@@ -298,6 +301,43 @@ namespace InputLogic
 
             xPerSecond *= timing;
             yPerSecond *= timing;
+
+            if (Dictionary.toggleState.TryGetValue("Adaptive Recoil", out var adaptiveObj)
+                && adaptiveObj is true
+                && sustainedAfterDelaySec > 0)
+            {
+                double driftRawX = ReadAntiRecoilDouble("Drift Compensation X (Left/Right)",
+                    ReadAntiRecoilDouble("Drift Compensation X", 0.0));
+                double driftRawY = ReadAntiRecoilDouble("Drift Compensation Y (Up/Down)",
+                    ReadAntiRecoilDouble("Drift Compensation Y", 0.0));
+                double sprayFadeX = Convert.ToDouble(Dictionary.AntiRecoilSettings["Spray Fade X"]);
+                double sprayFadeY = Convert.ToDouble(Dictionary.AntiRecoilSettings["Spray Fade Y"]);
+                double sprayFadeXSpeedSec = Math.Clamp(
+                    ReadAntiRecoilDouble("Spray Fade X Speed", 1.0), 1.0, 120.0);
+                double sprayFadeYSpeedSec = Math.Clamp(
+                    ReadAntiRecoilDouble("Spray Fade Y Speed", 1.0), 1.0, 120.0);
+                double driftXSpeedSec = Math.Clamp(
+                    ReadAntiRecoilDouble("Drift Compensation X Speed", 1.0), 1.0, 120.0);
+                double driftYSpeedSec = Math.Clamp(
+                    ReadAntiRecoilDouble("Drift Compensation Y Speed", 1.0), 1.0, 120.0);
+
+                // Drift: opposite of spray fade — starts at 0 and ramps to full strength over Drift X/Y Speed seconds (linear).
+                double driftTx = Math.Min(1.0, sustainedAfterDelaySec / driftXSpeedSec);
+                double driftTy = Math.Min(1.0, sustainedAfterDelaySec / driftYSpeedSec);
+                double driftBoostX = ApplyAntiRecoilCurve(driftRawX) * driftTx;
+                double driftBoostY = ApplyAntiRecoilCurve(driftRawY) * driftTy;
+
+                // Spray fade: 0% = no fade. At 100%, base compensation reaches 0 linearly over Spray Fade * Speed seconds.
+                double fadeX = sprayFadeX <= 0
+                    ? 1.0
+                    : Math.Max(0.0, 1.0 - (sprayFadeX / 100.0) * (sustainedAfterDelaySec / sprayFadeXSpeedSec));
+                double fadeY = sprayFadeY <= 0
+                    ? 1.0
+                    : Math.Max(0.0, 1.0 - (sprayFadeY / 100.0) * (sustainedAfterDelaySec / sprayFadeYSpeedSec));
+
+                xPerSecond = xPerSecond * fadeX + driftBoostX * timing;
+                yPerSecond = yPerSecond * fadeY + driftBoostY * timing;
+            }
 
             AccumulateAntiRecoilPixels(xPerSecond, yPerSecond, dtSeconds, out int xRecoil, out int yRecoil);
 
@@ -332,7 +372,7 @@ namespace InputLogic
         public static void DoAntiRecoil()
         {
             // Backwards-compatible fallback path; dt-driven loop should call the overload with dt.
-            DoAntiRecoil(0.001);
+            DoAntiRecoil(0.001, 0.0);
         }
 
         public static void MoveCrosshair(int detectedX, int detectedY)

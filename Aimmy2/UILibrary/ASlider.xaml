@@ -28,7 +28,7 @@
                        VerticalAlignment="Top"
                        Height="40"
                        HorizontalAlignment="Left"
-                       Width="172" />
+                       Width="200" />
                 <Label x:Name="AdjustNotifier"
                        Padding="10,10,10,10"
                        FontFamily="{StaticResource Atkinson Hyperlegible}"

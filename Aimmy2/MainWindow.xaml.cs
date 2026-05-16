@@ -144,6 +144,7 @@ namespace Aimmy2
             InitializeWindows();
 
             EnsureRequiredFiles();
+            Aimmy2.AILogic.ModelClassLabels.LoadFromDefaultPath();
 
             // Initialize anti recoil timer on UI dispatcher
             arManager.HoldDownLoad();
@@ -204,7 +205,7 @@ namespace Aimmy2
             // Create the file if it doesn't exist
             if (!File.Exists(labelsPath))
             {
-                File.WriteAllText(labelsPath, "Enemy");
+                File.WriteAllText(labelsPath, "Head\r\nPlayer");
             }
         }
 
@@ -228,6 +229,8 @@ namespace Aimmy2
                 {
                     SaveDictionary.LoadJSON(dict, path);
                 }
+
+                NormalizeDisableAntiRecoilKeybindAfterLoad();
             });
 
             // Load these on UI thread since they might show notifications
@@ -236,6 +239,34 @@ namespace Aimmy2
             ResetMinimizedMenus();
 
             ApplyThemeColorFromConfig();
+        }
+
+        /// <summary>
+        /// Older builds defaulted Disable Anti Recoil to Oem6 (Right Bracket). Migrate to End and save so the key no longer "reverts".
+        /// </summary>
+        private static void NormalizeDisableAntiRecoilKeybindAfterLoad()
+        {
+            const string key = "Disable Anti Recoil Keybind";
+            if (!Dictionary.bindingSettings.TryGetValue(key, out var raw))
+                return;
+
+            var s = raw?.ToString()?.Trim();
+            if (string.IsNullOrEmpty(s))
+                return;
+
+            if (string.Equals(s, "Oem6", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(s, "OemCloseBrackets", StringComparison.OrdinalIgnoreCase))
+            {
+                Dictionary.bindingSettings[key] = "End";
+                try
+                {
+                    SaveDictionary.WriteJSON(Dictionary.bindingSettings, "bin\\binding.cfg");
+                }
+                catch
+                {
+                    // Dictionary is corrected for this session even if the file cannot be written.
+                }
+            }
         }
 
         private static void ResetMinimizedMenus()
@@ -464,13 +495,13 @@ namespace Aimmy2
         {
             Dictionary.colorState["Theme Color"] = ThemeManager.GetThemeColorHex();
 
-            SaveDictionary.WriteJSON(Dictionary.sliderSettings);
+            SaveDictionary.WriteJSON(ConfigPersistence.BuildMainSliderConfigForSave("", ""));
             SaveDictionary.WriteJSON(Dictionary.minimizeState, "bin\\minimize.cfg");
             SaveDictionary.WriteJSON(Dictionary.bindingSettings, "bin\\binding.cfg");
             SaveDictionary.WriteJSON(Dictionary.dropdownState, "bin\\dropdown.cfg");
             SaveDictionary.WriteJSON(Dictionary.colorState, "bin\\colors.cfg");
             SaveDictionary.WriteJSON(Dictionary.filelocationState, "bin\\filelocations.cfg");
-            SaveDictionary.WriteJSON(Dictionary.AntiRecoilSettings, "bin\\anti_recoil_configs\\Default.cfg");
+            SaveDictionary.WriteJSON(ConfigPersistence.BuildAntiRecoilConfigForSave(), "bin\\anti_recoil_configs\\Default.cfg");
         }
 
         #endregion
@@ -644,6 +675,15 @@ namespace Aimmy2
                 ["StreamGuard"] = () =>
                 {
                     StreamGuardManager.ApplyStreamGuardToAllWindows(Dictionary.toggleState[title]);
+                },
+                ["Adaptive Recoil"] = () =>
+                {
+                    Dictionary.AntiRecoilSettings["Adaptive Recoil"] = Dictionary.toggleState["Adaptive Recoil"];
+                    if (uiManager.P_AdaptiveRecoilOptions != null)
+                    {
+                        uiManager.P_AdaptiveRecoilOptions.Visibility =
+                            Dictionary.toggleState[title] ? Visibility.Visible : Visibility.Collapsed;
+                    }
                 },
             };
 
@@ -846,13 +886,28 @@ namespace Aimmy2
 
         private void LoadGunConfig(string configKey)
         {
-            if (Dictionary.toggleState["Enable Gun Switching Keybind"])
-            {
-                if (Dictionary.filelocationState.TryGetValue(configKey, out var configPath))
-                {
-                    LoadAntiRecoilConfig(configPath.ToString(), true);
-                }
-            }
+            if (!Dictionary.toggleState["Enable Gun Switching Keybind"])
+                return;
+
+            if (!Dictionary.filelocationState.TryGetValue(configKey, out var configPath))
+                return;
+
+            var path = configPath?.ToString();
+            if (string.IsNullOrWhiteSpace(path))
+                return;
+
+            LoadAntiRecoilConfig(path, loading_outside_startup: true, fromGunKeybind: true);
+        }
+
+        private static bool ShouldHideAntiRecoilLoadNotice(bool fromGunKeybind)
+        {
+            if (!fromGunKeybind)
+                return false;
+
+            if (!Dictionary.toggleState.TryGetValue("Enable Gun Switching Keybind", out var enabled) || enabled is not true)
+                return false;
+
+            return GameplayNoticeFilter.ShouldSuppressOverlayDuringGameplay();
         }
 
         #endregion
@@ -915,10 +970,19 @@ namespace Aimmy2
                     ["Top"] = 1,
                     ["Bottom"] = 2
                 }),
-                (uiManager.D_TargetClass, "Target Class", new Dictionary<string, int>
+                (uiManager.D_TargetPriority, "Target Priority", new Dictionary<string, int>
                 {
                     ["Best Confidence"] = 0,
+                    ["Closest Distance"] = 1,
+                    ["Closest Crosshair"] = 2,
                     ["Closest Detection"] = 1
+                }),
+                (uiManager.D_TargetClass, "Target Class", new Dictionary<string, int>
+                {
+                    ["Smart Detection"] = 0,
+                    ["Head"] = 1,
+                    ["Player"] = 2,
+                    ["Best Confidence"] = 0
                 }),
                 (uiManager.D_MovementPath, "Movement Path", new Dictionary<string, int>
                 {
@@ -950,6 +1014,43 @@ namespace Aimmy2
                 })
             };
 
+            var targetPriorityModes = new HashSet<string>(StringComparer.Ordinal)
+            {
+                "Best Confidence",
+                "Closest Distance",
+                "Closest Crosshair",
+                "Closest Detection"
+            };
+
+            if (Dictionary.dropdownState.TryGetValue("Target Class", out var legacyTargetClassValue)
+                && legacyTargetClassValue != null)
+            {
+                var legacyTargetClass = legacyTargetClassValue.ToString() ?? "";
+                if (targetPriorityModes.Contains(legacyTargetClass)
+                    && !Dictionary.dropdownState.ContainsKey("Target Priority"))
+                {
+                    Dictionary.dropdownState["Target Priority"] = legacyTargetClass == "Closest Detection"
+                        ? "Closest Distance"
+                        : legacyTargetClassValue;
+                    Dictionary.dropdownState.Remove("Target Class");
+                }
+                else if (string.Equals(legacyTargetClass, "Best Confidence", StringComparison.Ordinal))
+                {
+                    Dictionary.dropdownState["Target Class"] = "Smart Detection";
+                }
+            }
+
+            if (!Dictionary.dropdownState.ContainsKey("Target Class"))
+            {
+                Dictionary.dropdownState["Target Class"] = "Smart Detection";
+            }
+
+            if (Dictionary.dropdownState.TryGetValue("Target Priority", out var targetPrioritySaved)
+                && string.Equals(targetPrioritySaved?.ToString(), "Closest Detection", StringComparison.Ordinal))
+            {
+                Dictionary.dropdownState["Target Priority"] = "Closest Distance";
+            }
+
             foreach (var (dropdown, key, mappings) in dropdownConfigs)
             {
                 if (dropdown == null)
@@ -960,6 +1061,10 @@ namespace Aimmy2
                 if (Dictionary.dropdownState.TryGetValue(key, out var value))
                 {
                     var stringValue = value?.ToString() ?? "";
+                    if (key == "Target Priority")
+                        stringValue = string.Equals(stringValue, "Closest Detection", StringComparison.Ordinal)
+                            ? "Closest Distance"
+                            : stringValue;
 
                     if (mappings.TryGetValue(stringValue, out int index))
                     {
@@ -977,7 +1082,7 @@ namespace Aimmy2
 
         private void LoadConfig(string path = "bin\\configs\\Default.cfg", bool loading_from_configlist = false)
         {
-            SaveDictionary.LoadJSON(Dictionary.sliderSettings, path);
+            ConfigPersistence.LoadMainSliderConfig(path);
 
             if (!loading_from_configlist || _menuControls["AimMenu"] == null || !_menuInitialized["AimMenu"])
                 return;
@@ -986,6 +1091,10 @@ namespace Aimmy2
             {
                 ShowSuggestedModelIfSpecified();
                 ApplyConfigToSliders();
+                if (uiManager.T_StickyAim != null)
+                    UpdateToggleUI(uiManager.T_StickyAim, Dictionary.toggleState["Sticky Aim"]);
+                UpdateSliderVisibility(uiManager);
+                ApplyAntiRecoilConfig();
             }
             catch (Exception e)
             {
@@ -1058,7 +1167,7 @@ namespace Aimmy2
             }
         }
 
-        public void LoadAntiRecoilConfig(string path = "bin\\anti_recoil_configs\\Default.cfg", bool loading_outside_startup = false)
+        public void LoadAntiRecoilConfig(string path = "bin\\anti_recoil_configs\\Default.cfg", bool loading_outside_startup = false, bool fromGunKeybind = false)
         {
             try
             {
@@ -1072,7 +1181,7 @@ namespace Aimmy2
                 if (!File.Exists(path))
                 {
                     // Create default config file
-                    SaveDictionary.WriteJSON(Dictionary.AntiRecoilSettings, path);
+                    SaveDictionary.WriteJSON(ConfigPersistence.BuildAntiRecoilConfigForSave(), path);
 
                     // Only show notification if not during startup
                     if (loading_outside_startup)
@@ -1086,15 +1195,18 @@ namespace Aimmy2
                     return;
                 }
 
-                SaveDictionary.LoadJSON(Dictionary.AntiRecoilSettings, path);
+                ConfigPersistence.ResetAntiRecoilSettingsToDefaults();
+                SaveDictionary.LoadJSON(Dictionary.AntiRecoilSettings, path, strict: false);
+                NormalizeLegacyDriftCompensationKeys();
+                SyncAdaptiveRecoilFromLoadedConfig();
 
                 if (!loading_outside_startup || _menuControls["AimMenu"] == null || !_menuInitialized["AimMenu"])
                     return;
 
                 ApplyAntiRecoilConfig();
 
-                // Only show notification if not during startup
-                if (loading_outside_startup)
+                // Hide loaded notice during gameplay (gun keybind + fullscreen/borderless game focused).
+                if (loading_outside_startup && !ShouldHideAntiRecoilLoadNotice(fromGunKeybind))
                 {
                     Application.Current.Dispatcher.Invoke(() =>
                     {
@@ -1120,6 +1232,47 @@ namespace Aimmy2
             }
         }
 
+        /// <summary>
+        /// Applies Adaptive Recoil on/off from the loaded anti-recoil file to runtime state and UI.
+        /// </summary>
+        private void SyncAdaptiveRecoilFromLoadedConfig()
+        {
+            bool enabled = ConfigPersistence.ReadAdaptiveRecoilFromSettings();
+            Dictionary.toggleState["Adaptive Recoil"] = enabled;
+            Dictionary.AntiRecoilSettings["Adaptive Recoil"] = enabled;
+
+            if (_menuControls["AimMenu"] == null || !_menuInitialized["AimMenu"] || uiManager.T_AdaptiveRecoil == null)
+                return;
+
+            UpdateToggleUI(uiManager.T_AdaptiveRecoil, enabled);
+            Toggle_Action("Adaptive Recoil");
+        }
+
+        /// <summary>
+        /// Older configs used "Drift Compensation X/Y" without axis hints; merge into the canonical keys and drop legacy entries.
+        /// </summary>
+        private static void NormalizeLegacyDriftCompensationKeys()
+        {
+            const string newX = "Drift Compensation X (Left/Right)";
+            const string oldX = "Drift Compensation X";
+            const string newY = "Drift Compensation Y (Up/Down)";
+            const string oldY = "Drift Compensation Y";
+
+            if (Dictionary.AntiRecoilSettings.TryGetValue(oldX, out var oldXv))
+            {
+                if (!Dictionary.AntiRecoilSettings.ContainsKey(newX))
+                    Dictionary.AntiRecoilSettings[newX] = Convert.ToDouble(oldXv);
+                Dictionary.AntiRecoilSettings.Remove(oldX);
+            }
+
+            if (Dictionary.AntiRecoilSettings.TryGetValue(oldY, out var oldYv))
+            {
+                if (!Dictionary.AntiRecoilSettings.ContainsKey(newY))
+                    Dictionary.AntiRecoilSettings[newY] = Convert.ToDouble(oldYv);
+                Dictionary.AntiRecoilSettings.Remove(oldY);
+            }
+        }
+
         private void ApplyAntiRecoilConfig()
         {
             var sliderConfigs = new[]
@@ -1127,7 +1280,15 @@ namespace Aimmy2
                 ("Hold Time", uiManager.S_HoldTime, 0.0),
                 ("Fire Rate", uiManager.S_FireRate, 1.0),
                 ("Y Recoil (Up/Down)", uiManager.S_YAntiRecoilAdjustment, 0.0),
-                ("X Recoil (Left/Right)", uiManager.S_XAntiRecoilAdjustment, 0.0)
+                ("X Recoil (Left/Right)", uiManager.S_XAntiRecoilAdjustment, 0.0),
+                ("Drift Compensation X (Left/Right)", uiManager.S_DriftCompensationX, 0.0),
+                ("Drift Compensation X Speed", uiManager.S_DriftCompensationXSpeed, 1.0),
+                ("Drift Compensation Y (Up/Down)", uiManager.S_DriftCompensationY, 0.0),
+                ("Drift Compensation Y Speed", uiManager.S_DriftCompensationYSpeed, 1.0),
+                ("Spray Fade X", uiManager.S_SprayFadeX, 0.0),
+                ("Spray Fade X Speed", uiManager.S_SprayFadeXSpeed, 1.0),
+                ("Spray Fade Y", uiManager.S_SprayFadeY, 0.0),
+                ("Spray Fade Y Speed", uiManager.S_SprayFadeYSpeed, 1.0)
             };
 
             ApplySliderValues(sliderConfigs, Dictionary.AntiRecoilSettings);

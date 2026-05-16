@@ -41,5 +41,12 @@ namespace UILibrary
                 Dictionary.filelocationState[main_dictionary_path] = openFileDialog.FileName;
             }
         }
+
+        /// <summary>Clears the assigned path only (does not delete any file on disk).</summary>
+        public void ClearLocation()
+        {
+            FileLocationTextbox.Text = string.Empty;
+            Dictionary.filelocationState[main_dictionary_path] = string.Empty;
+        }
     }
 }
