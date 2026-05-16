@@ -30,6 +30,9 @@
     <Platforms>AnyCPU;x64</Platforms>	  <Product></Product>
 	  <Title></Title>
 	  <AssemblyName>YmmiaV2</AssemblyName>
+    <Version>2.6.5</Version>
+    <AssemblyVersion>2.6.5.0</AssemblyVersion>
+    <FileVersion>2.6.5.0</FileVersion>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <SignAssembly>False</SignAssembly>
     <RunPostBuildEvent>OnBuildSuccess</RunPostBuildEvent>

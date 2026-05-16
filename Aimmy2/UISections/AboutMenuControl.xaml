@@ -65,7 +65,7 @@
                             Cursor="Hand"
                             MouseLeftButtonUp="VersionBorder_Click">
                         <Label x:Name="AboutDesc"
-                               Content="v2.6.0"
+                               Content="v2.6.5"
                                FontFamily="{StaticResource Atkinson Hyperlegible}"
                                FontSize="11"
                                Foreground="White"
