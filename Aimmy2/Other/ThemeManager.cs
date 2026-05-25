@@ -1,8 +1,12 @@
+﻿using Newtonsoft.Json;
+using System.Globalization;
+using System.IO;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Media.Imaging;
 using System.Windows.Threading;
-using Visuality;
 
 namespace Aimmy2.Theme
 {
@@ -22,7 +26,14 @@ namespace Aimmy2.Theme
         // Cache of themed elements for performance
         private static readonly Dictionary<WeakReference, List<ThemeElementInfo>> _themedElements = new Dictionary<WeakReference, List<ThemeElementInfo>>();
         private static readonly DispatcherTimer _cleanupTimer;
-
+        #region Media
+        //Eclude windows such as esp/fov/notice/setatni/etc.. To use this one, make sure you use this ("ThemeManager.ExcludeWindowFromBackground(this);")
+        private static readonly HashSet<Window> _excludedWindows = new HashSet<Window>();
+        //Track the windows using MainBorder and apply the background to it, you need ("ThemeManager.TrackWindow(this);")
+        private static readonly List<Window> _trackedWindows = new List<Window>();
+        // too much testing/failing, so were sticking to last resort.
+        private static readonly Dictionary<Window, Border> _windowBrightnessOverlays = new Dictionary<Window, Border>();
+        #endregion
         // Theme element tags
         public const string THEME_TAG = "Theme";
         public const string THEME_DARK_TAG = "ThemeDark";
@@ -60,7 +71,16 @@ namespace Aimmy2.Theme
         public static Color ThemeColorDark => _themeColorDark;
         public static Color ThemeColorLight => _themeColorLight;
         public static Color ThemeGradientDark => _themeGradientDark;
-
+        #region Media
+        private static ImageBrush _mediaBackgroundBrush;
+        private static string _currentMediaPath;
+        private static bool _isMediaBackground = false;
+        public static bool IsMediaBackground => _isMediaBackground;
+        public static string CurrentMediaPath => _currentMediaPath;
+        private static double _mediaBrightness = 1.0;
+        private const string MediaConfigPath = "bin\\media.cfg";
+        private static string _mediaConfigPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, MediaConfigPath);
+        #endregion
         /// <summary>
         /// Sets the base theme color and updates all registered elements
         /// </summary>
@@ -70,7 +90,12 @@ namespace Aimmy2.Theme
 
             _themeColor = baseColor;
             CalculateThemeColors(baseColor);
-            UpdateAllThemedElements();
+
+            // Update all themed elements EXCEPT the background if media is active
+            UpdateAllThemedElements(skipBackground: _isMediaBackground);
+
+            // Update MainWindow gradients (only if no media background)
+            UpdateWindowBackgrounds();
 
             // Update MainWindow gradients
             UpdateMainWindowGradients();
@@ -97,7 +122,402 @@ namespace Aimmy2.Theme
                 // Log error or use default color
             }
         }
+        #region Window Media Logic to apply/exclude
+        public static void SetMediaBackground(string filePath, double brightness = 1.0)
+        {
+            try
+            {
+                _isMediaBackground = true;
+                _currentMediaPath = filePath;
+                _mediaBrightness = brightness;
 
+                // Load the media
+                var bitmap = new BitmapImage();
+                bitmap.BeginInit();
+                bitmap.UriSource = new Uri(filePath);
+                bitmap.CacheOption = BitmapCacheOption.OnLoad;
+                bitmap.EndInit();
+
+                _mediaBackgroundBrush = new ImageBrush(bitmap)
+                {
+                    Stretch = Stretch.Fill,
+                    //If the stretch is too much, use this one.
+                    //Stretch = Stretch.UniformToFill,
+                };
+
+                // Save settings
+                SaveMediaSettings(filePath, brightness);
+
+                UpdateWindowBackgrounds();
+            }
+            catch
+            {
+                ClearMediaBackground();
+            }
+        }
+        #region Saving/Loading Media Image
+        private static void SaveMediaSettings(string path, double brightness)
+        {
+            try
+            {
+                string fileName = Path.GetFileName(path);
+                var settings = new Dictionary<string, string>
+            {
+            { "MediaFile", fileName },
+            { "Brightness", brightness.ToString(CultureInfo.InvariantCulture) }
+            };
+                File.WriteAllText(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "bin", "media.cfg"),
+                    JsonConvert.SerializeObject(settings));
+            }
+            catch { }
+        }
+
+        public static void LoadMediaSettings()
+        {
+            try
+            {
+                string configPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "bin", "media.cfg");
+                if (File.Exists(configPath))
+                {
+                    var settings = JsonConvert.DeserializeObject<Dictionary<string, string>>(
+                        File.ReadAllText(configPath));
+                    if (settings.TryGetValue("MediaFile", out var fileName) &&
+                        !string.IsNullOrEmpty(fileName))
+                    {
+                        string filePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "bin", "media", fileName);
+                        if (File.Exists(filePath))
+                        {
+                            double brightness = 1.0;
+                            if (settings.TryGetValue("Brightness", out var brightnessStr))
+                            {
+                                double.TryParse(brightnessStr, NumberStyles.Any, CultureInfo.InvariantCulture, out brightness);
+                            }
+                            SetMediaBackground(filePath, brightness);
+                        }
+                    }
+                }
+            }
+            catch { }
+        }
+
+        public static void InitializeMediaBackground()
+        {
+            try
+            {
+                string configPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "bin", "media.cfg");
+                if (File.Exists(configPath))
+                {
+                    var settings = JsonConvert.DeserializeObject<Dictionary<string, string>>(File.ReadAllText(configPath));
+                    if (settings.TryGetValue("MediaFile", out var fileName) && !string.IsNullOrEmpty(fileName))
+                    {
+                        string mediaPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "bin", "media", fileName);
+                        if (File.Exists(mediaPath))
+                        {
+                            double brightness = 1.0;
+                            if (settings.TryGetValue("Brightness", out var brightnessStr))
+                            {
+                                brightness = double.Parse(brightnessStr, CultureInfo.InvariantCulture);
+                            }
+                            SetMediaBackground(mediaPath, brightness);
+                        }
+                    }
+                }
+            }
+            catch { }
+        }
+        #endregion
+        private static LinearGradientBrush CreateThemeGradientBrush(Window window)
+        {
+            var brush = new LinearGradientBrush
+            {
+                StartPoint = new Point(0, 0),
+                EndPoint = new Point(0.5, 1),
+                GradientStops = new GradientStopCollection
+            {
+                new GradientStop(Colors.Black, 0.27),
+                new GradientStop(_themeGradientDark, 1)
+            }
+            };
+            if (window.FindName("RotaryGradient") is RotateTransform rotaryTransform)
+            {
+                brush.RelativeTransform = new TransformGroup
+                {
+                    Children = new TransformCollection
+            {
+                new ScaleTransform { CenterX = 0.5, CenterY = 0.5 },
+                new SkewTransform { CenterX = 0.5, CenterY = 0.5 },
+                rotaryTransform,
+                new TranslateTransform()
+            }
+                };
+            }
+            else
+            {
+                brush.RelativeTransform = new TransformGroup
+                {
+                    Children = new TransformCollection
+            {
+                new ScaleTransform { CenterX = 0.5, CenterY = 0.5 },
+                new SkewTransform { CenterX = 0.5, CenterY = 0.5 },
+                new RotateTransform { Angle = 0, CenterX = 0.5, CenterY = 0.5 },
+                new TranslateTransform()
+            }
+                };
+            }
+
+            return brush;
+        }
+        public static void UpdateWindowBackgrounds(Color? color = null)
+        {
+            if (Application.Current == null) return;
+            foreach (var window in _trackedWindows.ToArray())
+            {
+                try
+                {
+                    window.Dispatcher.Invoke(() => UpdateWindowBackground(window));
+                }
+                catch { }
+            }
+            foreach (Window window in Application.Current.Windows)
+            {
+                if (!_trackedWindows.Contains(window) && !_excludedWindows.Contains(window))
+                {
+                    try
+                    {
+                        window.Dispatcher.Invoke(() => UpdateWindowBackground(window));
+                        _trackedWindows.Add(window);
+                        window.Closed += (s, e) => _trackedWindows.Remove(window);
+                    }
+                    catch { }
+                }
+            }
+        }
+        //too much reading so ima make my own
+        public static void TrackWindow(Window window)
+        {
+            if (!_trackedWindows.Contains(window))
+            {
+                _trackedWindows.Add(window);
+                window.Closed += (s, e) =>
+                {
+                    _trackedWindows.Remove(window);
+                    CleanupWindowBrightnessOverlay(window);
+                };
+                UpdateWindowBackground(window);
+            }
+        }
+        // Js to exclude fov/esp/etc
+        public static void ExcludeWindowFromBackground(Window window)
+        {
+            if (window != null)
+            {
+                _excludedWindows.Add(window);
+                window.Closed += (s, e) => _excludedWindows.Remove(window);
+            }
+        }
+        private static void UpdateWindowBackground(Window window)
+        {
+            if (window == null || window.Dispatcher == null)
+                return;
+
+            window.Dispatcher.Invoke(() =>
+            {
+                try
+                {
+                    if (_excludedWindows.Contains(window))
+                        return;
+
+                    CleanupWindowBrightnessOverlay(window);
+
+                    var border = window.FindName("MainBorder") as Border;
+                    if (border != null)
+                    {
+                        if (_isMediaBackground && _mediaBackgroundBrush != null)
+                        {
+                            border.Background = ApplyBrightnessToBrush(_mediaBackgroundBrush, _mediaBrightness);
+                        }
+                        else
+                        {
+                            border.Background = CreateThemeGradientBrush(window);
+                        }
+                        return;
+                    }
+                    if (window.Content is Grid rootGrid)
+                    {
+                        rootGrid.Background = _isMediaBackground && _mediaBackgroundBrush != null
+                            ? ApplyBrightnessToBrush(_mediaBackgroundBrush, _mediaBrightness)
+                            : Brushes.Transparent;
+                    }
+                    else
+                    {
+                        window.Background = _isMediaBackground && _mediaBackgroundBrush != null
+                            ? ApplyBrightnessToBrush(_mediaBackgroundBrush, _mediaBrightness)
+                            : Brushes.Transparent;
+                    }
+                }
+                catch
+                {
+
+                }
+            });
+        }
+        private static Brush ApplyBrightnessToBrush(Brush originalBrush, double brightness)
+        {
+            if (originalBrush is ImageBrush imageBrush)
+            {
+                var baseBrush = new ImageBrush(imageBrush.ImageSource.Clone())
+                {
+                    Stretch = imageBrush.Stretch,
+                    AlignmentX = imageBrush.AlignmentX,
+                    AlignmentY = imageBrush.AlignmentY,
+                    TileMode = imageBrush.TileMode,
+                    Viewport = imageBrush.Viewport,
+                    ViewportUnits = imageBrush.ViewportUnits,
+                    Opacity = 1.0
+                };
+                var bmp = baseBrush.ImageSource as BitmapSource;
+                if (bmp == null)
+                    return baseBrush;
+                var rect = new Rect(0, 0, bmp.PixelWidth, bmp.PixelHeight);
+                Color overlayColor;
+                if (brightness < 1.0)
+                {
+                    byte alpha = (byte)(255 * Math.Sqrt(1.0 - brightness));
+                    overlayColor = Color.FromArgb(alpha, 0, 0, 0);
+                }
+                else if (brightness > 1.0)
+                {
+                    byte alpha = (byte)(255 * Math.Min(1.0, (brightness - 1.0) * 0.7));
+                    overlayColor = Color.FromArgb(alpha, 255, 255, 255);
+                }
+                else
+                {
+                    return baseBrush;
+                }
+                var overlayBrush = new SolidColorBrush(overlayColor);
+                var drawingGroup = new DrawingGroup();
+                drawingGroup.Children.Add(new ImageDrawing(baseBrush.ImageSource, rect));
+                drawingGroup.Children.Add(new GeometryDrawing(overlayBrush, null, new RectangleGeometry(rect)));
+                var combinedBrush = new DrawingBrush(drawingGroup)
+                {
+                    Stretch = baseBrush.Stretch,
+                    AlignmentX = baseBrush.AlignmentX,
+                    AlignmentY = baseBrush.AlignmentY,
+                    TileMode = baseBrush.TileMode,
+                    Viewport = baseBrush.Viewport,
+                    ViewportUnits = baseBrush.ViewportUnits,
+                    Opacity = 1.0
+                };
+                return combinedBrush;
+            }
+            return originalBrush;
+        }
+        public static void UpdateMediaBrightness(double brightness)
+        {
+            if (_isMediaBackground)
+            {
+                _mediaBrightness = brightness;
+                if (!string.IsNullOrEmpty(_currentMediaPath))
+                {
+                    string fileName = Path.GetFileName(_currentMediaPath);
+                    var settings = new Dictionary<string, string>
+            {
+                { "MediaFile", fileName },
+                { "Brightness", brightness.ToString(CultureInfo.InvariantCulture) }
+            };
+                    File.WriteAllText(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "bin", "media.cfg"),
+                        JsonConvert.SerializeObject(settings));
+                }
+                UpdateWindowBackgrounds();
+            }
+        }
+        public static double MediaBrightness
+        {
+            get => _mediaBrightness;
+            set
+            {
+                _mediaBrightness = value;
+                UpdateWindowBackgrounds();
+            }
+        }
+        #endregion
+
+        #region Media Cleaning Code - KMP
+        public static void ClearMediaBackground()
+        {
+            _isMediaBackground = false;
+            _currentMediaPath = null;
+            _mediaBackgroundBrush = null;
+            _mediaBrightness = 1.0;
+            try { File.Delete(_mediaConfigPath); } catch { }
+
+            foreach (var kvp in _windowBrightnessOverlays.ToList())
+            {
+                if (kvp.Value.Parent is Panel parent)
+                {
+                    parent.Children.Remove(kvp.Value);
+                }
+            }
+            _windowBrightnessOverlays.Clear();
+            foreach (var window in _trackedWindows.ToArray())
+            {
+                try
+                {
+                    window.Dispatcher.Invoke(() =>
+                    {
+                        if (window.FindName("MainBorder") is Border border)
+                        {
+                            border.MouseMove -= RotateGradientBasedOnMouse;
+                            border.Background = CreateThemeGradientBrush(window);
+                        }
+                        else if (window.Content is Grid rootGrid)
+                        {
+                            rootGrid.Background = Brushes.Transparent;
+                        }
+                        else
+                        {
+                            window.Background = Brushes.Transparent;
+                        }
+                    });
+                }
+                catch { }
+            }
+            UpdateAllThemedElements();
+            UpdateDynamicResources();
+            UpdateMainWindowGradients();
+        }
+        public static void RotateGradientBasedOnMouse(object sender, MouseEventArgs e)
+        {
+            if (sender is Border border && border.Background is LinearGradientBrush gradientBrush)
+            {
+                if (gradientBrush.RelativeTransform is TransformGroup transformGroup)
+                {
+                    var rotateTransform = transformGroup.Children.OfType<RotateTransform>().FirstOrDefault();
+                    if (rotateTransform != null)
+                    {
+                        var mousePos = e.GetPosition(border);
+                        var centerX = border.ActualWidth / 2;
+                        var centerY = border.ActualHeight / 2;
+                        double angle = Math.Atan2(mousePos.Y - centerY, mousePos.X - centerX) * (180 / Math.PI);
+                        rotateTransform.Angle = angle;
+                    }
+                }
+            }
+        }
+        // -testing the cleanup.
+        private static void CleanupWindowBrightnessOverlay(Window window)
+        {
+            if (_windowBrightnessOverlays.ContainsKey(window))
+            {
+                var overlay = _windowBrightnessOverlays[window];
+                if (overlay.Parent is Panel parent)
+                {
+                    parent.Children.Remove(overlay);
+                }
+                _windowBrightnessOverlays.Remove(window);
+            }
+        }
+        #endregion
         /// <summary>
         /// Registers an element to be themed
         /// </summary>
@@ -165,7 +585,7 @@ namespace Aimmy2.Theme
         /// <summary>
         /// Manually update all themed elements
         /// </summary>
-        public static void UpdateAllThemedElements()
+        public static void UpdateAllThemedElements(bool skipBackground = false)
         {
             var deadRefs = new List<WeakReference>();
 
@@ -173,10 +593,17 @@ namespace Aimmy2.Theme
             {
                 if (kvp.Key.IsAlive && kvp.Key.Target is FrameworkElement element)
                 {
-                    Application.Current.Dispatcher.BeginInvoke(new Action(() =>
+                    Application.Current.Dispatcher.Invoke(() =>
                     {
-                        ApplyThemeToElement(element, kvp.Value);
-                    }), DispatcherPriority.Render);
+                        foreach (var info in kvp.Value)
+                        {
+                            if (skipBackground && info.PropertyPath == "Background")
+                                continue;
+
+                            ApplyThemeToElement(element, new List<ThemeElementInfo> { info });
+
+                        }
+                    }, DispatcherPriority.Render);
                 }
                 else
                 {
@@ -445,13 +872,6 @@ namespace Aimmy2.Theme
             {
                 _themedElements.Remove(deadRef);
             }
-        }
-
-        internal static void ExcludeWindowFromBackground(FOV fOV)
-        {
-            // Keep compatibility with callers in this branch.
-            // Background exclusion pipeline is not implemented here, so no-op.
-            _ = fOV;
         }
 
         #endregion

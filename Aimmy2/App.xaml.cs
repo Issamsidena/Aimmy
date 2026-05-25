@@ -1,13 +1,10 @@
-using Aimmy2.Class;
-using Aimmy2.Theme;
+﻿using Aimmy2.Theme;
 using Class;
-using System;
-using System.Collections.Generic;
 using System.Windows;
 
 namespace Aimmy2
 {
-    public partial class App : System.Windows.Application
+    public partial class App : Application
     {
         protected override void OnStartup(StartupEventArgs e)
         {
@@ -17,6 +14,13 @@ namespace Aimmy2
             // Set shutdown mode to prevent app from closing when startup window closes
             ShutdownMode = ShutdownMode.OnExplicitShutdown;
 
+#if DEBUG
+            var _mainWindow = new MainWindow();
+            MainWindow = _mainWindow;
+            _mainWindow.Show();
+            return;
+#endif
+            // code IS reachable, only in release though
             try
             {
                 // Create and show startup window
@@ -42,26 +46,33 @@ namespace Aimmy2
 
         private void InitializeTheme()
         {
-            const string fallbackHex = "#FF722ED1";
             try
             {
-                SaveDictionary.EnsureDirectoriesExist();
-                SaveDictionary.LoadJSON(Dictionary.colorState, "bin\\colors.cfg");
-
-                if (Dictionary.colorState.TryGetValue("Theme Color", out var saved) &&
-                    saved != null &&
-                    !string.IsNullOrWhiteSpace(saved.ToString()))
+                // Load the color state configuration
+                var colorState = new Dictionary<string, dynamic>
                 {
-                    ThemeManager.SetThemeColor(saved.ToString()!.Trim());
-                    return;
+                    { "Theme Color", "#FF722ED1" }
+                };
+
+                // Load saved colors
+                SaveDictionary.LoadJSON(colorState, "bin\\colors.cfg");
+
+                // Apply theme color if found
+                if (colorState.TryGetValue("Theme Color", out var themeColor) && themeColor is string colorString)
+                {
+                    ThemeManager.SetThemeColor(colorString);
+                }
+                else
+                {
+                    // Use default purple if no saved color
+                    ThemeManager.SetThemeColor("#FF722ED1");
                 }
             }
-            catch
+            catch (Exception ex)
             {
-                // Fall through to default
+                // Log error and use default color
+                ThemeManager.SetThemeColor("#FF722ED1");
             }
-
-            ThemeManager.SetThemeColor(fallbackHex);
         }
     }
 }

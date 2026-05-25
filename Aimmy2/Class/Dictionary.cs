@@ -18,30 +18,33 @@ namespace Aimmy2.Class
             { "Emergency Stop Keybind", "Delete"},
             { "Model Switch Keybind", "OemPipe"},
             { "Anti Recoil Keybind", "Left"},
-            { "Disable Anti Recoil Keybind", "End"},
+            { "Enable/Disable Anti Recoil Keybind", "End"},
             { "Gun 1 Key", "D1"},
             { "Gun 2 Key", "D2"},
-            { "Gun 3 Key", "D3"},
+            { "Gun 3 Key", "D3"}
         };
 
         public static Dictionary<string, dynamic> sliderSettings = new()
         {
             { "Suggested Model", ""},
             { "FOV Size", 640 },
-            { "Dynamic FOV Size", 280 },
-            { "Mouse Sensitivity (+/-)", 0.90 },
+            { "Dynamic FOV Size", 200 },
+            { "Mouse Sensitivity (+/-)", 0.80 },
             { "Mouse Jitter", 4 },
             { "Sticky Aim Threshold", 50 },
+            { "Approach Speed", 0.6 },
+            { "Approach Threshold", 50 },
             { "Y Offset (Up/Down)", 0 },
             { "Y Offset (%)", 50 },
             { "X Offset (Left/Right)", 0 },
             { "X Offset (%)", 50 },
             { "EMA Smoothening", 0.5},
-            { "Kalman Lead Time", 0.15 },
+            { "Prediction Blend", 50 },
+            { "Kalman Lead Time", 0.10 },
             { "WiseTheFox Lead Time", 0.15 },
-            { "Shalloe Lead Multiplier", 4.0 },
+            { "Shalloe Lead Multiplier", 3.0 },
             { "Auto Trigger Delay", 0.1 },
-            { "AI Minimum Confidence", 30 },
+            { "AI Minimum Confidence", 45 },
             { "AI Confidence Font Size", 20 },
             { "Corner Radius", 0 },
             { "Border Thickness", 1 },
@@ -54,15 +57,13 @@ namespace Aimmy2.Class
         {
             { "Aim Assist", false },
             { "Sticky Aim", false },
+            { "Snap Lock", false },
             { "Constant AI Tracking", false },
             { "Constant AI Shooting", false },
             { "Predictions", false },
             { "EMA Smoothening", false },
             { "Enable Model Switch Keybind", true },
-            { "Enable Gun Switching Keybind", false },
             { "Auto Trigger", false },
-            { "Anti Recoil", false },
-            { "Adaptive Recoil", false },
             { "FOV", false },
             { "Dynamic FOV", false },
             { "Third Person Support", false },
@@ -70,15 +71,22 @@ namespace Aimmy2.Class
             { "Show Detected Player", false },
             { "Cursor Check", false },
             { "Spray Mode", false },
+            //{ "Only When Held", false },
+            { "Anti Recoil", false },
+            { "Adaptive Recoil", false },
+            { "Enable Gun Switching Keybind", false },
+            { "Show FOV", true },
             { "Show AI Confidence", false },
             { "Show Tracers", false },
             { "Collect Data While Playing", false },
             { "Auto Label Data", false },
             { "LG HUB Mouse Movement", false },
             { "Mouse Background Effect", true },
-            { "UI TopMost", false },
             { "Debug Mode", false },
+            { "UI TopMost", false },
+            //--
             { "StreamGuard", false },
+            //--
             { "X Axis Percentage Adjustment", false },
             { "Y Axis Percentage Adjustment", false }
         };
@@ -89,12 +97,12 @@ namespace Aimmy2.Class
             { "Aim Config", false },
             { "Predictions", false },
             { "Auto Trigger", false },
-            { "Anti Recoil", false},
+            { "Anti Recoil", false },
             { "Anti Recoil Config", false },
             { "FOV Config", false },
             { "ESP Config", false },
-            { "Settings Menu", false },
             { "Model Settings", false },
+            { "Settings Menu", false },
             { "X/Y Percentage Adjustment", false },
             { "Theme Settings", false },
             { "Screen Settings", false}
@@ -105,13 +113,13 @@ namespace Aimmy2.Class
             { "Prediction Method", "Kalman Filter" },
             { "Detection Area Type", "Closest to Center Screen" },
             { "Aiming Boundaries Alignment", "Center" },
-            { "Target Priority", "Best Confidence" },
-            { "Target Class", "Smart Detection" },
-            { "Movement Path", "Cubic Bezier" },
             { "Mouse Movement Method", "Mouse Event" },
             { "Screen Capture Method", "DirectX" },
-            { "Tracer Position", "Top" }
-
+            { "Tracer Position", "Bottom" },
+            { "Movement Path", "None" },
+            { "Image Size", "640" },
+            { "Target Class", "Smart Detection" },
+            { "Target Priority", "Best Confidence" }
         };
 
         public static Dictionary<string, dynamic> colorState = new()
@@ -119,6 +127,14 @@ namespace Aimmy2.Class
             { "FOV Color", "#FF8080FF"},
             { "Detected Player Color", "#FF00FFFF"},
             { "Theme Color", "#FF722ED1" }
+        };
+
+        public static Dictionary<string, dynamic> filelocationState = new()
+        {
+            { "ddxoft DLL Location", ""},
+            { "Gun 1 Config", "" },
+            { "Gun 2 Config", "" },
+            { "Gun 3 Config", "" }
         };
 
         public static Dictionary<string, dynamic> AntiRecoilSettings = new()
@@ -136,14 +152,6 @@ namespace Aimmy2.Class
             { "Spray Fade Y", 0.0 },
             { "Spray Fade X Speed", 1.0 },
             { "Spray Fade Y Speed", 1.0 }
-        };
-
-        public static Dictionary<string, dynamic> filelocationState = new()
-        {
-            { "ddxoft DLL Location", ""},
-            { "Gun 1 Config", "" },
-            { "Gun 2 Config", "" },
-            { "Gun 3 Config", "" }
         };
     }
 }

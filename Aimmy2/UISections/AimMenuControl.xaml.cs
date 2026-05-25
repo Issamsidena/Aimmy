@@ -1,4 +1,4 @@
-using Aimmy2.AILogic;
+﻿using Aimmy2.AILogic;
 using Aimmy2.Class;
 using Aimmy2.MouseMovementLibraries.GHubSupport;
 using Aimmy2.UILibrary;
@@ -40,12 +40,12 @@ namespace Aimmy2.Controls
         // Public properties for MainWindow access
         public StackPanel AimAssistPanel => AimAssist;
         public StackPanel TriggerBotPanel => TriggerBot;
-        public StackPanel AntiRecoilPanel => AntiRecoil;
         public StackPanel ESPConfigPanel => ESPConfig;
         public StackPanel AimConfigPanel => AimConfig;
-        public StackPanel AntiRecoilConfigPanel => AntiRecoilConfig;
         public StackPanel PredictionsPanel => Predictions;
         public StackPanel FOVConfigPanel => FOVConfig;
+        public StackPanel AntiRecoilPanel => AntiRecoil;
+        public StackPanel AntiRecoilConfigPanel => AntiRecoilConfig;
         public ScrollViewer AimMenuScrollViewer => AimMenu;
 
         public AimMenuControl()
@@ -65,20 +65,28 @@ namespace Aimmy2.Controls
 
             AIManager.ImageSizeUpdated += OnImageSizeChanged;
 
-            // Load all sections (independently so one broken key/state
-            // never causes the full menu to render empty).
-            SafeLoadSection(LoadAimAssist);
-            SafeLoadSection(LoadAimConfig);
-            SafeLoadSection(LoadAntiRecoilConfig);
-            SafeLoadSection(LoadPredictions);
-            SafeLoadSection(LoadTriggerBot);
-            SafeLoadSection(LoadAntiRecoil);
-            SafeLoadSection(LoadFOVConfig);
-            SafeLoadSection(LoadESPConfig);
+            // Load all sections
+            LoadAimAssist();
+            LoadAimConfig();
+            LoadPredictions();
+            LoadTriggerBot();
+            LoadAntiRecoil();
+            LoadAntiRecoilConfig();
+            LoadFOVConfig();
+            LoadESPConfig();
 
             // Apply minimize states after loading
             ApplyMinimizeStates();
-            _mainWindow.UpdateAimAssistSliderVisibility();
+
+            // Force adaptive recoil sub-panel to match current toggle state.
+            _mainWindow.Toggle_Action("Adaptive Recoil");
+
+            // Force Snap Lock + Sticky Aim sub-sliders to match current toggle state.
+            // SetPanelVisibility during ApplyMinimizeStates flips all children to Visible,
+            // which clobbers the per-slider visibility we set in AddSlider. Re-run the
+            // toggle handlers so they apply the correct hide/show based on toggleState.
+            _mainWindow.Toggle_Action("Snap Lock");
+            _mainWindow.Toggle_Action("Sticky Aim");
         }
 
         #region Minimize State Management
@@ -124,28 +132,22 @@ namespace Aimmy2.Controls
 
         private void SetPanelVisibility(StackPanel panel, bool isVisible)
         {
-            var adaptiveOptions = _mainWindow?.uiManager.P_AdaptiveRecoilOptions;
-
             foreach (UIElement child in panel.Children)
             {
+                // The Adaptive Recoil options panel is gated by the Adaptive Recoil toggle, not just the section's minimize state.
+                if (_mainWindow != null && ReferenceEquals(child, _mainWindow.uiManager.P_AdaptiveRecoilOptions))
+                {
+                    bool adaptiveOn = Dictionary.toggleState.TryGetValue("Adaptive Recoil", out var v) && (bool)v;
+                    child.Visibility = isVisible && adaptiveOn ? Visibility.Visible : Visibility.Collapsed;
+                    continue;
+                }
+
                 // Keep titles, spacers, and bottom rectangles always visible
                 bool shouldStayVisible = child is ATitle || child is ASpacer || child is ARectangleBottom;
 
-                if (shouldStayVisible)
-                {
-                    child.Visibility = Visibility.Visible;
-                    continue;
-                }
-
-                // Adaptive drift/spray controls must follow the Adaptive Recoil toggle; never force them visible when off.
-                if (adaptiveOptions != null && ReferenceEquals(child, adaptiveOptions))
-                {
-                    bool adaptiveOn = Dictionary.toggleState.TryGetValue("Adaptive Recoil", out var ar) && ar is true;
-                    child.Visibility = (isVisible && adaptiveOn) ? Visibility.Visible : Visibility.Collapsed;
-                    continue;
-                }
-
-                child.Visibility = isVisible ? Visibility.Visible : Visibility.Collapsed;
+                child.Visibility = shouldStayVisible
+                    ? Visibility.Visible
+                    : (isVisible ? Visibility.Visible : Visibility.Collapsed);
             }
         }
 
@@ -220,7 +222,6 @@ namespace Aimmy2.Controls
                     tooltip: "Lock onto a target until it moves out of range instead of switching targets.")
                 .AddSlider("Sticky Aim Threshold", "Pixels", 1, 1, 0, 100, s =>
                 {
-                    ApplySliderWholeSteps(s);
                     uiManager.S_StickyAimThreshold = s;
                     // Set initial visibility based on toggle state
                     s.Visibility = Dictionary.toggleState["Sticky Aim"]
@@ -230,11 +231,6 @@ namespace Aimmy2.Controls
                     tooltip: "The key you hold to activate aim assist.")
                 .AddKeyChanger("Second Aim Keybind", tooltip: "An alternate key to activate aim assist.")
                 .AddSeparator();
-
-            if (uiManager.T_StickyAim != null)
-            {
-                uiManager.T_StickyAim.Reader.Click += (s, e) => _mainWindow?.UpdateAimAssistSliderVisibility();
-            }
         }
 
         private void LoadAimConfig()
@@ -285,15 +281,16 @@ namespace Aimmy2.Controls
                 }, tooltip: "How mouse movements are sent. Try different options if aim assist isn't working.")
                 .AddDropdown("Movement Path", d =>
                 {
+                    d.DropdownBox.SelectedIndex = 0;
                     uiManager.D_MovementPath = d;
+                    _mainWindow.AddDropdownItem(d, "None");
                     _mainWindow.AddDropdownItem(d, "Cubic Bezier");
                     _mainWindow.AddDropdownItem(d, "Exponential");
                     _mainWindow.AddDropdownItem(d, "Linear");
                     _mainWindow.AddDropdownItem(d, "Adaptive");
                     _mainWindow.AddDropdownItem(d, "Perlin Noise");
-                    d.DropdownBox.SelectedIndex = 0;
-                    Dictionary.dropdownState["Movement Path"] = "Cubic Bezier";
-                }, tooltip: "Cubic Bezier is default. Other paths are optional.")
+                    Dictionary.dropdownState["Movement Path"] = "None";
+                }, tooltip: "The curve style used when moving to a target. Affects how natural the movement looks.")
                 .AddDropdown("Detection Area Type", d =>
                 {
                     d.DropdownBox.SelectedIndex = -1;
@@ -318,15 +315,6 @@ namespace Aimmy2.Controls
                     _mainWindow.AddDropdownItem(d, "Top");
                     _mainWindow.AddDropdownItem(d, "Bottom");
                 }, tooltip: "Where to aim on the detected target box. Center is usually best.")
-                .AddDropdown("Target Class", d =>
-                {
-                    uiManager.D_TargetClass = d;
-                    _mainWindow.AddDropdownItem(d, "Smart Detection");
-                    _mainWindow.AddDropdownItem(d, "Head");
-                    _mainWindow.AddDropdownItem(d, "Player");
-                    d.DropdownBox.SelectedIndex = 0;
-                    Dictionary.dropdownState["Target Class"] = "Smart Detection";
-                }, tooltip: "Wich type of target to aim at. Smart Detection Picks the Most certain detection. Smart Detection = both Head and Player classes. Head = head only (top of box). Player = full body (center of box).")
                 .AddDropdown("Target Priority", d =>
                 {
                     uiManager.D_TargetPriority = d;
@@ -335,7 +323,7 @@ namespace Aimmy2.Controls
                     _mainWindow.AddDropdownItem(d, "Closest Crosshair");
                     d.DropdownBox.SelectedIndex = 0;
                     Dictionary.dropdownState["Target Priority"] = "Best Confidence";
-                }, tooltip: "Best Confidence = highest AI score. Closest Distance = larger box first (near/big enemy before far/small). Closest Crosshair = the enemy nearest your crosshair wins (5 cm from reticle beats 11 cm from reticle). Best Confidence Usually Best,Can Reduce False Positive");
+                }, tooltip: "Best Confidence = highest AI score. Closest Distance = larger box first (near/big enemy before far/small). Closest Crosshair = the enemy nearest your crosshair wins. Best Confidence is usually best and reduces false positives.");
 
             // Add sliders with validation
             AddConfigSliders(builder, uiManager);
@@ -359,18 +347,14 @@ namespace Aimmy2.Controls
                                 "The Mouse Sensitivity you have set can cause Aimmy to be unstable to aim, please increase if you suffer from this problem", true);
                     };
                 }, tooltip: "How fast the aim moves. Lower = faster and snappier, higher = slower and smoother.")
-                .AddSlider("Mouse Jitter", "Jitter", 1, 1, 0, 15, s =>
-                {
-                    ApplySliderWholeSteps(s);
-                    uiManager.S_MouseJitter = s;
-                }, tooltip: "Adds random small movements to make aim look more human-like.")
+                .AddSlider("Mouse Jitter", "Jitter", 1, 1, 0, 15, s => uiManager.S_MouseJitter = s,
+                    tooltip: "Adds random small movements to make aim look more human-like.")
                 .AddToggle("Y Axis Percentage Adjustment", t => uiManager.T_YAxisPercentageAdjustment = t,
                     tooltip: "Enable the Y Offset (%) slider to adjust aim vertically by percentage.")
                 .AddToggle("X Axis Percentage Adjustment", t => uiManager.T_XAxisPercentageAdjustment = t,
                     tooltip: "Enable the X Offset (%) slider to adjust aim horizontally by percentage.")
                 .AddSlider("Y Offset (Up/Down)", "Offset", 1, 1, -150, 150, s =>
                 {
-                    ApplySliderWholeSteps(s);
                     uiManager.S_YOffset = s;
                     // Set initial visibility based on toggle state
                     s.Visibility = Dictionary.toggleState["Y Axis Percentage Adjustment"]
@@ -378,7 +362,6 @@ namespace Aimmy2.Controls
                 }, tooltip: "Move aim point up (negative) or down (positive) in pixels.")
                 .AddSlider("Y Offset (%)", "Percent", 1, 1, 0, 100, s =>
                 {
-                    ApplySliderWholeSteps(s);
                     uiManager.S_YOffsetPercent = s;
                     // Set initial visibility based on toggle state
                     s.Visibility = Dictionary.toggleState["Y Axis Percentage Adjustment"]
@@ -386,7 +369,6 @@ namespace Aimmy2.Controls
                 }, tooltip: "Move aim point up or down as a percentage of the target box height.")
                 .AddSlider("X Offset (Left/Right)", "Offset", 1, 1, -150, 150, s =>
                 {
-                    ApplySliderWholeSteps(s);
                     uiManager.S_XOffset = s;
                     // Set initial visibility based on toggle state
                     s.Visibility = Dictionary.toggleState["X Axis Percentage Adjustment"]
@@ -394,7 +376,6 @@ namespace Aimmy2.Controls
                 }, tooltip: "Move aim point left (negative) or right (positive) in pixels.")
                 .AddSlider("X Offset (%)", "Percent", 1, 1, 0, 100, s =>
                 {
-                    ApplySliderWholeSteps(s);
                     uiManager.S_XOffsetPercent = s;
                     // Set initial visibility based on toggle state
                     s.Visibility = Dictionary.toggleState["X Axis Percentage Adjustment"]
@@ -442,13 +423,32 @@ namespace Aimmy2.Controls
                     // Start collapsed - visibility will be set by LoadDropdownStates
                     s.Visibility = Visibility.Collapsed;
                 }, tooltip: "How far ahead to predict target position. Higher = more prediction, may overshoot.")
-                .AddSlider("Shalloe Lead Multiplier", "Frames", 1, 1, 1, 10, s =>
+                .AddSlider("Shalloe Lead Multiplier", "Frames", 0.5, 0.5, 1, 10, s =>
                 {
-                    ApplySliderWholeSteps(s);
                     uiManager.S_ShalloeLeadMultiplier = s;
                     // Start collapsed - visibility will be set by LoadDropdownStates
                     s.Visibility = Visibility.Collapsed;
                 }, tooltip: "How many frames ahead to predict. Higher = more prediction, may overshoot.")
+                .AddSlider("Prediction Blend", "Percent", 1, 1, 0, 100, s =>
+                {
+                    uiManager.S_PredictionBlend = s;
+                }, tooltip: "Blend between predicted position and actual position. Higher = more prediction influence.")
+                .AddToggle("Snap Lock", t => uiManager.T_SnapLock = t,
+                    tooltip: "Gradually slow down speed as you get close to a target for an instant lock.")
+                .AddSlider("Approach Speed", "Percent", 0.05, 0.1, 0.05, 1, s =>
+                {
+                    uiManager.S_ApproachSpeed = s;
+                    // Set initial visibility based on toggle state
+                    s.Visibility = Dictionary.toggleState["Snap Lock"]
+                        ? Visibility.Visible : Visibility.Collapsed;
+                }, tooltip: "What percent of the original speed to use. Higher = faster but less stable, Lower = slower but steadier.")
+                .AddSlider("Approach Threshold", "Pixels", 1, 1, 10, 300, s =>
+                {
+                    uiManager.S_ApproachThreshold = s;
+                    // Set initial visibility based on toggle state
+                    s.Visibility = Dictionary.toggleState["Snap Lock"]
+                        ? Visibility.Visible : Visibility.Collapsed;
+                }, tooltip: "Distance from target where snap lock activates. Higher = activates sooner.")
                 .AddToggle("EMA Smoothening", t => uiManager.T_EMASmoothing = t,
                     tooltip: "Smooth out aim movements to reduce jitter and make tracking steadier.")
                 .AddSlider("EMA Smoothening", "Amount", 0.01, 0.01, 0.01, 1, s =>
@@ -489,186 +489,6 @@ namespace Aimmy2.Controls
                 //.AddToggle("Only When Held", t => uiManager.T_OnlyWhenHeld = t)
                 .AddSlider("Auto Trigger Delay", "Seconds", 0.01, 0.1, 0.01, 1, s => uiManager.S_AutoTriggerDelay = s,
                     tooltip: "Wait time before firing after detecting a target. Helps avoid accidental shots.")
-                .AddSeparator();
-        }
-
-        private void LoadAntiRecoil()
-        {
-            var uiManager = _mainWindow!.uiManager;
-            var builder = new SectionBuilder(this, AntiRecoil);
-
-            builder
-                .AddTitle("Anti Recoil", true, t =>
-                {
-                    uiManager.AT_AntiRecoil = t;
-                    t.Minimize.Click += (s, e) => TogglePanel("Anti Recoil", AntiRecoilPanel);
-                })
-                .AddToggle("Anti Recoil", t => uiManager.T_AntiRecoil = t,
-                    tooltip: "Apply recoil compensation while holding your Anti Recoil key.")
-                .AddKeyChanger("Anti Recoil Keybind", k => uiManager.C_AntiRecoilKeybind = k,
-                    tooltip: "Hold this key to apply anti recoil.")
-                .AddKeyChanger("Disable Anti Recoil Keybind", k => uiManager.C_ToggleAntiRecoilKeybind = k,
-                    tooltip: "Press this key to quickly disable anti recoil.")
-                .AddSlider("Hold Time", "Ms", 1, 1, 1, 1000, s =>
-                {
-                    ApplySliderWholeSteps(s);
-                    uiManager.S_HoldTime = s;
-                }, tooltip: "Delay before anti recoil starts when the key is held.")
-                .AddButton("Record Fire Rate", b =>
-                {
-                    uiManager.B_RecordFireRate = b;
-                    b.Reader.Click += (s, e) => new SetAntiRecoil(_mainWindow).Show();
-                }, tooltip: "Measure and set fire rate from your weapon input.")
-                .AddSlider("Fire Rate", "Ms", 1, 1, 1, 1000, s =>
-                {
-                    ApplySliderWholeSteps(s);
-                    uiManager.S_FireRate = s;
-                }, tooltip: "Milliseconds between shots for recoil timing.")
-                // Fine float precision when dragging; +/- buttons step by 1.00 (no snapping/rounding).
-                .AddSlider("Y Recoil (Up/Down)", "Move", 1.0, 1.0, -1000, 1000, s =>
-                {
-                    uiManager.S_YAntiRecoilAdjustment = s;
-                    // Keep values like 143.00 (no fractional steps).
-                    s.Slider.IsSnapToTickEnabled = true;
-                }, tooltip: "Vertical recoil compensation value.")
-                .AddSlider("X Recoil (Left/Right)", "Move", 1.0, 1.0, -1000, 1000, s =>
-                {
-                    uiManager.S_XAntiRecoilAdjustment = s;
-                    // Keep values like 143.00 (no fractional steps).
-                    s.Slider.IsSnapToTickEnabled = true;
-                }, tooltip: "Horizontal recoil compensation value.")
-                .AddToggle("Adaptive Recoil", t => uiManager.T_AdaptiveRecoil = t,
-                    tooltip: "When on, drift and spray-fade sliders apply while firing. When off, those controls are hidden.");
-
-            var adaptivePanel = new StackPanel
-            {
-                Visibility = Dictionary.toggleState["Adaptive Recoil"] ? Visibility.Visible : Visibility.Collapsed
-            };
-            uiManager.P_AdaptiveRecoilOptions = adaptivePanel;
-
-            var driftX = CreateSlider("Drift Compensation X (Left/Right)", "Move", 1.0, 1.0, -1000, 1000,
-                tooltip: "Extra horizontal pull (left/right) that ramps from 0 to full over Drift X speed seconds.");
-            driftX.Slider.IsSnapToTickEnabled = true;
-            uiManager.S_DriftCompensationX = driftX;
-            adaptivePanel.Children.Add(driftX);
-
-            var driftXSpeed = CreateSlider("Drift X speed", "Sec", 1, 1, 1, 120,
-                tooltip: "Seconds to reach full Drift X strength (linear ramp from 0). Default 1 — mirror of Spray Fade X Speed.");
-            ApplySliderWholeSteps(driftXSpeed);
-            uiManager.S_DriftCompensationXSpeed = driftXSpeed;
-            adaptivePanel.Children.Add(driftXSpeed);
-
-            var driftY = CreateSlider("Drift Compensation Y (Up/Down)", "Move", 1.0, 1.0, -1000, 1000,
-                tooltip: "Extra vertical pull (up/down) that ramps from 0 to full over Drift Y speed seconds.");
-            driftY.Slider.IsSnapToTickEnabled = true;
-            uiManager.S_DriftCompensationY = driftY;
-            adaptivePanel.Children.Add(driftY);
-
-            var driftYSpeed = CreateSlider("Drift Y speed", "Sec", 1, 1, 1, 120,
-                tooltip: "Seconds to reach full Drift Y strength (linear ramp from 0). Default 1 — mirror of Spray Fade Y Speed.");
-            ApplySliderWholeSteps(driftYSpeed);
-            uiManager.S_DriftCompensationYSpeed = driftYSpeed;
-            adaptivePanel.Children.Add(driftYSpeed);
-
-            var sprayFadeX = CreateSlider("Spray Fade X", "%", 1.0, 1.0, 0, 100,
-                tooltip: "How strongly horizontal compensation fades while spraying. Speed sets seconds to full fade at 100%.");
-            sprayFadeX.Slider.IsSnapToTickEnabled = true;
-            uiManager.S_SprayFadeX = sprayFadeX;
-            adaptivePanel.Children.Add(sprayFadeX);
-
-            var sprayFadeXSpeed = CreateSlider("Spray fade X speed", "Sec", 1, 1, 1, 120,
-                tooltip: "At 100% Spray Fade X, horizontal compensation reaches zero after this many seconds (linear). Default 1.");
-            ApplySliderWholeSteps(sprayFadeXSpeed);
-            uiManager.S_SprayFadeXSpeed = sprayFadeXSpeed;
-            adaptivePanel.Children.Add(sprayFadeXSpeed);
-
-            var sprayFadeY = CreateSlider("Spray Fade Y", "%", 1.0, 1.0, 0, 100,
-                tooltip: "How strongly vertical compensation fades while spraying. Speed sets seconds to full fade at 100%.");
-            sprayFadeY.Slider.IsSnapToTickEnabled = true;
-            uiManager.S_SprayFadeY = sprayFadeY;
-            adaptivePanel.Children.Add(sprayFadeY);
-
-            var sprayFadeYSpeed = CreateSlider("Spray fade Y speed", "Sec", 1, 1, 1, 120,
-                tooltip: "At 100% Spray Fade Y, vertical compensation reaches zero after this many seconds (linear). Default 1.");
-            ApplySliderWholeSteps(sprayFadeYSpeed);
-            uiManager.S_SprayFadeYSpeed = sprayFadeYSpeed;
-            adaptivePanel.Children.Add(sprayFadeYSpeed);
-
-            AntiRecoil.Children.Add(adaptivePanel);
-            AntiRecoil.Children.Add(new ARectangleBottom());
-            AntiRecoil.Children.Add(new ASpacer());
-
-            BindAntiRecoilSlider(uiManager.S_HoldTime, "Hold Time", 10.0);
-            BindAntiRecoilSlider(uiManager.S_FireRate, "Fire Rate", 200.0);
-            BindAntiRecoilSlider(uiManager.S_YAntiRecoilAdjustment, "Y Recoil (Up/Down)", 0.0);
-            BindAntiRecoilSlider(uiManager.S_XAntiRecoilAdjustment, "X Recoil (Left/Right)", 0.0);
-            BindAntiRecoilSlider(uiManager.S_DriftCompensationX, "Drift Compensation X (Left/Right)", 0.0);
-            BindAntiRecoilSlider(uiManager.S_DriftCompensationXSpeed, "Drift Compensation X Speed", 1.0);
-            BindAntiRecoilSlider(uiManager.S_DriftCompensationY, "Drift Compensation Y (Up/Down)", 0.0);
-            BindAntiRecoilSlider(uiManager.S_DriftCompensationYSpeed, "Drift Compensation Y Speed", 1.0);
-            BindAntiRecoilSlider(uiManager.S_SprayFadeX, "Spray Fade X", 0.0);
-            BindAntiRecoilSlider(uiManager.S_SprayFadeXSpeed, "Spray Fade X Speed", 1.0);
-            BindAntiRecoilSlider(uiManager.S_SprayFadeY, "Spray Fade Y", 0.0);
-            BindAntiRecoilSlider(uiManager.S_SprayFadeYSpeed, "Spray Fade Y Speed", 1.0);
-
-            _mainWindow!.Toggle_Action("Adaptive Recoil");
-        }
-
-        private void LoadAntiRecoilConfig()
-        {
-            var uiManager = _mainWindow!.uiManager;
-            var builder = new SectionBuilder(this, AntiRecoilConfig);
-
-            builder
-                .AddTitle("Anti Recoil Config", true, t =>
-                {
-                    uiManager.AT_AntiRecoilConfig = t;
-                    t.Minimize.Click += (s, e) => TogglePanel("Anti Recoil Config", AntiRecoilConfigPanel);
-                })
-                .AddToggle("Enable Gun Switching Keybind", t => uiManager.T_EnableGunSwitchingKeybind = t,
-                    tooltip: "Allow switching recoil profiles by gun keybinds.")
-                .AddButton("Save Anti Recoil Config", b =>
-                {
-                    uiManager.B_SaveRecoilConfig = b;
-                    b.Reader.Click += (s, e) =>
-                    {
-                        SaveDictionary.WriteJSON(ConfigPersistence.BuildAntiRecoilConfigForSave(), "bin\\anti_recoil_configs\\Default.cfg");
-                        new NoticeBar("[Anti Recoil] Saved \"Default.cfg\"", 2000).Show();
-                    };
-                }, tooltip: "Save current anti recoil values as default.")
-                .AddKeyChanger("Gun 1 Key", k => uiManager.C_Gun1Key = k, tooltip: "Keybind to load gun profile 1.")
-                .AddFileLocator("Gun 1 Config", f => uiManager.AFL_Gun1Config = f, "Config files (*.cfg)|*.cfg", "\\bin\\anti_recoil_configs")
-                .AddButton("Clear Gun 1 Config", b =>
-                {
-                    b.Reader.Click += (s, e) => ClearGunConfigAssignment("Gun 1 Config", uiManager.AFL_Gun1Config);
-                }, tooltip: "Unassign the config path for Gun 1 (does not delete the file on disk).")
-                .AddButton("Load Gun 1 Config", b =>
-                {
-                    uiManager.B_LoadGun1Config = b;
-                    b.Reader.Click += (s, e) => LoadGunConfigFromPath("Gun 1 Config");
-                }, tooltip: "Load anti recoil config file assigned to Gun 1.")
-                .AddKeyChanger("Gun 2 Key", k => uiManager.C_Gun2Key = k, tooltip: "Keybind to load gun profile 2.")
-                .AddFileLocator("Gun 2 Config", f => uiManager.AFL_Gun2Config = f, "Config files (*.cfg)|*.cfg", "\\bin\\anti_recoil_configs")
-                .AddButton("Clear Gun 2 Config", b =>
-                {
-                    b.Reader.Click += (s, e) => ClearGunConfigAssignment("Gun 2 Config", uiManager.AFL_Gun2Config);
-                }, tooltip: "Unassign the config path for Gun 2 (does not delete the file on disk).")
-                .AddButton("Load Gun 2 Config", b =>
-                {
-                    uiManager.B_LoadGun2Config = b;
-                    b.Reader.Click += (s, e) => LoadGunConfigFromPath("Gun 2 Config");
-                }, tooltip: "Load anti recoil config file assigned to Gun 2.")
-                .AddKeyChanger("Gun 3 Key", k => uiManager.C_Gun3Key = k, tooltip: "Keybind to load gun profile 3.")
-                .AddFileLocator("Gun 3 Config", f => uiManager.AFL_Gun3Config = f, "Config files (*.cfg)|*.cfg", "\\bin\\anti_recoil_configs")
-                .AddButton("Clear Gun 3 Config", b =>
-                {
-                    b.Reader.Click += (s, e) => ClearGunConfigAssignment("Gun 3 Config", uiManager.AFL_Gun3Config);
-                }, tooltip: "Unassign the config path for Gun 3 (does not delete the file on disk).")
-                .AddButton("Load Gun 3 Config", b =>
-                {
-                    uiManager.B_LoadGun3Config = b;
-                    b.Reader.Click += (s, e) => LoadGunConfigFromPath("Gun 3 Config");
-                }, tooltip: "Load anti recoil config file assigned to Gun 3.")
                 .AddSeparator();
         }
 
@@ -744,7 +564,6 @@ namespace Aimmy2.Controls
                 })
                 .AddSlider("FOV Size", "Size", 1, 1, 10, 640, s =>
                 {
-                    ApplySliderWholeSteps(s);
                     uiManager.S_FOVSize = s;
                     s.Slider.ValueChanged += (sender, e) =>
                     {
@@ -754,7 +573,6 @@ namespace Aimmy2.Controls
                 }, tooltip: "Size of the detection area. Smaller = more precise, larger = wider coverage.")
                 .AddSlider("Dynamic FOV Size", "Size", 1, 1, 10, 640, s =>
                 {
-                    ApplySliderWholeSteps(s);
                     uiManager.S_DynamicFOVSize = s;
                     s.Slider.ValueChanged += (sender, e) =>
                     {
@@ -763,6 +581,217 @@ namespace Aimmy2.Controls
                     };
                 }, tooltip: "FOV size when holding the Dynamic FOV key. Usually smaller for scoped aim.")
                 .AddSeparator();
+        }
+
+        private void LoadAntiRecoil()
+        {
+            var uiManager = _mainWindow!.uiManager;
+            var builder = new SectionBuilder(this, AntiRecoil);
+
+            builder
+                .AddTitle("Anti Recoil", true, t =>
+                {
+                    uiManager.AT_AntiRecoil = t;
+                    t.Minimize.Click += (s, e) => TogglePanel("Anti Recoil", AntiRecoilPanel);
+                })
+                .AddToggle("Anti Recoil", t => uiManager.T_AntiRecoil = t,
+                    tooltip: "Apply recoil compensation while holding your Anti Recoil key.")
+                .AddKeyChanger("Anti Recoil Keybind", k => uiManager.C_AntiRecoilKeybind = k,
+                    tooltip: "Hold this key to apply anti recoil.")
+                .AddKeyChanger("Enable/Disable Anti Recoil Keybind", k => uiManager.C_ToggleAntiRecoilKeybind = k,
+                    tooltip: "Press this key to toggle anti recoil on or off in a single click.")
+                .AddSlider("Hold Time", "Ms", 1, 1, 1, 1000, s => uiManager.S_HoldTime = s,
+                    tooltip: "Delay before anti recoil starts when the key is held.")
+                .AddButton("Record Fire Rate", b =>
+                {
+                    uiManager.B_RecordFireRate = b;
+                    b.Reader.Click += (s, e) => new SetAntiRecoil(_mainWindow!).Show();
+                }, tooltip: "Measure and set fire rate from your weapon input.")
+                .AddSlider("Fire Rate", "Ms", 1, 1, 1, 1000, s => uiManager.S_FireRate = s,
+                    tooltip: "Milliseconds between shots for recoil timing.")
+                .AddSlider("Y Recoil (Up/Down)", "Move", 1.0, 1.0, -1000, 1000, s =>
+                {
+                    uiManager.S_YAntiRecoilAdjustment = s;
+                    s.Slider.IsSnapToTickEnabled = true;
+                }, tooltip: "Vertical recoil compensation value.")
+                .AddSlider("X Recoil (Left/Right)", "Move", 1.0, 1.0, -1000, 1000, s =>
+                {
+                    uiManager.S_XAntiRecoilAdjustment = s;
+                    s.Slider.IsSnapToTickEnabled = true;
+                }, tooltip: "Horizontal recoil compensation value.")
+                .AddToggle("Adaptive Recoil", t => uiManager.T_AdaptiveRecoil = t,
+                    tooltip: "When on, drift and spray-fade sliders apply while firing.");
+
+            var adaptivePanel = new StackPanel
+            {
+                Visibility = Dictionary.toggleState["Adaptive Recoil"] ? Visibility.Visible : Visibility.Collapsed
+            };
+            uiManager.P_AdaptiveRecoilOptions = adaptivePanel;
+
+            var driftX = CreateSlider("Drift Compensation X (Left/Right)", "Move", 1.0, 1.0, -1000, 1000,
+                tooltip: "Extra horizontal pull that ramps from 0 to full over Drift X speed seconds.");
+            driftX.Slider.IsSnapToTickEnabled = true;
+            uiManager.S_DriftCompensationX = driftX;
+            adaptivePanel.Children.Add(driftX);
+
+            var driftXSpeed = CreateSlider("Drift Compensation X Speed", "Sec", 1, 1, 1, 120,
+                tooltip: "Seconds to reach full Drift X strength.");
+            uiManager.S_DriftCompensationXSpeed = driftXSpeed;
+            adaptivePanel.Children.Add(driftXSpeed);
+
+            var driftY = CreateSlider("Drift Compensation Y (Up/Down)", "Move", 1.0, 1.0, -1000, 1000,
+                tooltip: "Extra vertical pull that ramps from 0 to full over Drift Y speed seconds.");
+            driftY.Slider.IsSnapToTickEnabled = true;
+            uiManager.S_DriftCompensationY = driftY;
+            adaptivePanel.Children.Add(driftY);
+
+            var driftYSpeed = CreateSlider("Drift Compensation Y Speed", "Sec", 1, 1, 1, 120,
+                tooltip: "Seconds to reach full Drift Y strength.");
+            uiManager.S_DriftCompensationYSpeed = driftYSpeed;
+            adaptivePanel.Children.Add(driftYSpeed);
+
+            var sprayFadeX = CreateSlider("Spray Fade X", "%", 1.0, 1.0, 0, 100,
+                tooltip: "How strongly horizontal compensation fades while spraying.");
+            sprayFadeX.Slider.IsSnapToTickEnabled = true;
+            uiManager.S_SprayFadeX = sprayFadeX;
+            adaptivePanel.Children.Add(sprayFadeX);
+
+            var sprayFadeXSpeed = CreateSlider("Spray Fade X Speed", "Sec", 1, 1, 1, 120,
+                tooltip: "At 100% Spray Fade X, horizontal compensation reaches zero after this many seconds.");
+            uiManager.S_SprayFadeXSpeed = sprayFadeXSpeed;
+            adaptivePanel.Children.Add(sprayFadeXSpeed);
+
+            var sprayFadeY = CreateSlider("Spray Fade Y", "%", 1.0, 1.0, 0, 100,
+                tooltip: "How strongly vertical compensation fades while spraying.");
+            sprayFadeY.Slider.IsSnapToTickEnabled = true;
+            uiManager.S_SprayFadeY = sprayFadeY;
+            adaptivePanel.Children.Add(sprayFadeY);
+
+            var sprayFadeYSpeed = CreateSlider("Spray Fade Y Speed", "Sec", 1, 1, 1, 120,
+                tooltip: "At 100% Spray Fade Y, vertical compensation reaches zero after this many seconds.");
+            uiManager.S_SprayFadeYSpeed = sprayFadeYSpeed;
+            adaptivePanel.Children.Add(sprayFadeYSpeed);
+
+            AntiRecoil.Children.Add(adaptivePanel);
+            AntiRecoil.Children.Add(new ARectangleBottom());
+            AntiRecoil.Children.Add(new ASpacer());
+
+            BindAntiRecoilSlider(uiManager.S_HoldTime, "Hold Time", 10.0);
+            BindAntiRecoilSlider(uiManager.S_FireRate, "Fire Rate", 200.0);
+            BindAntiRecoilSlider(uiManager.S_YAntiRecoilAdjustment, "Y Recoil (Up/Down)", 0.0);
+            BindAntiRecoilSlider(uiManager.S_XAntiRecoilAdjustment, "X Recoil (Left/Right)", 0.0);
+            BindAntiRecoilSlider(uiManager.S_DriftCompensationX, "Drift Compensation X (Left/Right)", 0.0);
+            BindAntiRecoilSlider(uiManager.S_DriftCompensationXSpeed, "Drift Compensation X Speed", 1.0);
+            BindAntiRecoilSlider(uiManager.S_DriftCompensationY, "Drift Compensation Y (Up/Down)", 0.0);
+            BindAntiRecoilSlider(uiManager.S_DriftCompensationYSpeed, "Drift Compensation Y Speed", 1.0);
+            BindAntiRecoilSlider(uiManager.S_SprayFadeX, "Spray Fade X", 0.0);
+            BindAntiRecoilSlider(uiManager.S_SprayFadeXSpeed, "Spray Fade X Speed", 1.0);
+            BindAntiRecoilSlider(uiManager.S_SprayFadeY, "Spray Fade Y", 0.0);
+            BindAntiRecoilSlider(uiManager.S_SprayFadeYSpeed, "Spray Fade Y Speed", 1.0);
+        }
+
+        private void LoadAntiRecoilConfig()
+        {
+            var uiManager = _mainWindow!.uiManager;
+            var builder = new SectionBuilder(this, AntiRecoilConfig);
+
+            builder
+                .AddTitle("Anti Recoil Config", true, t =>
+                {
+                    uiManager.AT_AntiRecoilConfig = t;
+                    t.Minimize.Click += (s, e) => TogglePanel("Anti Recoil Config", AntiRecoilConfigPanel);
+                })
+                .AddToggle("Enable Gun Switching Keybind", t => uiManager.T_EnableGunSwitchingKeybind = t,
+                    tooltip: "Allow switching recoil profiles by gun keybinds.")
+                .AddButton("Save Anti Recoil Config", b =>
+                {
+                    uiManager.B_SaveRecoilConfig = b;
+                    b.Reader.Click += (s, e) =>
+                    {
+                        Dictionary.AntiRecoilSettings["Adaptive Recoil"] = Dictionary.toggleState["Adaptive Recoil"];
+                        SaveDictionary.WriteJSON(Dictionary.AntiRecoilSettings, "bin\\anti_recoil_configs\\Default.cfg");
+                        new NoticeBar("[Anti Recoil] Saved \"Default.cfg\"", 2000).Show();
+                    };
+                }, tooltip: "Save current anti recoil values as default.")
+                .AddKeyChanger("Gun 1 Key", k => uiManager.C_Gun1Key = k, tooltip: "Keybind to load gun profile 1.")
+                .AddFileLocator("Gun 1 Config", f => uiManager.AFL_Gun1Config = f, "Config files (*.cfg)|*.cfg", "\\bin\\anti_recoil_configs")
+                .AddButton("Clear Gun 1 Config", b =>
+                {
+                    b.Reader.Click += (s, e) => ClearGunConfigAssignment("Gun 1 Config", uiManager.AFL_Gun1Config);
+                }, tooltip: "Unassign the config path for Gun 1.")
+                .AddButton("Load Gun 1 Config", b =>
+                {
+                    uiManager.B_LoadGun1Config = b;
+                    b.Reader.Click += (s, e) => LoadGunConfigFromPath("Gun 1 Config");
+                }, tooltip: "Load anti recoil config file assigned to Gun 1.")
+                .AddKeyChanger("Gun 2 Key", k => uiManager.C_Gun2Key = k, tooltip: "Keybind to load gun profile 2.")
+                .AddFileLocator("Gun 2 Config", f => uiManager.AFL_Gun2Config = f, "Config files (*.cfg)|*.cfg", "\\bin\\anti_recoil_configs")
+                .AddButton("Clear Gun 2 Config", b =>
+                {
+                    b.Reader.Click += (s, e) => ClearGunConfigAssignment("Gun 2 Config", uiManager.AFL_Gun2Config);
+                }, tooltip: "Unassign the config path for Gun 2.")
+                .AddButton("Load Gun 2 Config", b =>
+                {
+                    uiManager.B_LoadGun2Config = b;
+                    b.Reader.Click += (s, e) => LoadGunConfigFromPath("Gun 2 Config");
+                }, tooltip: "Load anti recoil config file assigned to Gun 2.")
+                .AddKeyChanger("Gun 3 Key", k => uiManager.C_Gun3Key = k, tooltip: "Keybind to load gun profile 3.")
+                .AddFileLocator("Gun 3 Config", f => uiManager.AFL_Gun3Config = f, "Config files (*.cfg)|*.cfg", "\\bin\\anti_recoil_configs")
+                .AddButton("Clear Gun 3 Config", b =>
+                {
+                    b.Reader.Click += (s, e) => ClearGunConfigAssignment("Gun 3 Config", uiManager.AFL_Gun3Config);
+                }, tooltip: "Unassign the config path for Gun 3.")
+                .AddButton("Load Gun 3 Config", b =>
+                {
+                    uiManager.B_LoadGun3Config = b;
+                    b.Reader.Click += (s, e) => LoadGunConfigFromPath("Gun 3 Config");
+                }, tooltip: "Load anti recoil config file assigned to Gun 3.")
+                .AddSeparator();
+        }
+
+        private static void BindAntiRecoilSlider(ASlider? slider, string settingKey, double fallback)
+        {
+            if (slider == null) return;
+
+            double initialValue = fallback;
+            if (Dictionary.AntiRecoilSettings.TryGetValue(settingKey, out var saved))
+                initialValue = Convert.ToDouble(saved);
+            else
+                Dictionary.AntiRecoilSettings[settingKey] = fallback;
+
+            slider.Slider.Value = initialValue;
+            slider.Slider.ValueChanged += (s, e) =>
+            {
+                Dictionary.AntiRecoilSettings[settingKey] = slider.Slider.Value;
+            };
+        }
+
+        private void ClearGunConfigAssignment(string fileLocationKey, AFileLocator? locator)
+        {
+            locator?.ClearLocation();
+            SaveDictionary.WriteJSON(Dictionary.filelocationState, "bin\\filelocations.cfg");
+            new NoticeBar(
+                $"[{fileLocationKey}] No file located — assignment cleared. Your .cfg file was not deleted.",
+                4000,
+                NoticeType.Warning).Show();
+        }
+
+        private void LoadGunConfigFromPath(string key)
+        {
+            if (!Dictionary.filelocationState.TryGetValue(key, out var configPath))
+            {
+                new NoticeBar($"[{key}] No file located.", 2500, NoticeType.Warning).Show();
+                return;
+            }
+
+            var path = configPath?.ToString();
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                new NoticeBar($"[{key}] No file located.", 2500, NoticeType.Warning).Show();
+                return;
+            }
+
+            _mainWindow?.LoadAntiRecoilConfig(path, loading_outside_startup: true, fromGunKeybind: false);
         }
 
         private void LoadESPConfig()
@@ -845,19 +874,16 @@ namespace Aimmy2.Controls
                 })
                 .AddSlider("AI Confidence Font Size", "Size", 1, 1, 1, 30, s =>
                 {
-                    ApplySliderWholeSteps(s);
                     uiManager.S_DPFontSize = s;
                     s.Slider.ValueChanged += (sender, e) => PropertyChanger.PostDPFontSize((int)s.Slider.Value);
                 }, tooltip: "Text size for the confidence percentage display.")
                 .AddSlider("Corner Radius", "Radius", 1, 1, 0, 100, s =>
                 {
-                    ApplySliderWholeSteps(s);
                     uiManager.S_DPCornerRadius = s;
                     s.Slider.ValueChanged += (sender, e) => PropertyChanger.PostDPWCornerRadius((int)s.Slider.Value);
                 }, tooltip: "How rounded the detection box corners are. 0 = sharp corners.")
-                .AddSlider("Border Thickness", "Thickness", 1, 1, 1, 10, s =>
+                .AddSlider("Border Thickness", "Thickness", 0.1, 1, 0.1, 10, s =>
                 {
-                    ApplySliderWholeSteps(s);
                     uiManager.S_DPBorderThickness = s;
                     s.Slider.ValueChanged += (sender, e) => PropertyChanger.PostDPWBorderThickness(s.Slider.Value);
                 }, tooltip: "How thick the detection box outline is.")
@@ -894,17 +920,6 @@ namespace Aimmy2.Controls
             slider.Slider.Maximum = imageSize;
         }
 
-        /// <summary>
-        /// +/- buttons use <see cref="CreateSlider"/> buttonSteps; this aligns drag behavior to whole 1.00 steps as well.
-        /// </summary>
-        private static void ApplySliderWholeSteps(ASlider s)
-        {
-            s.Slider.TickFrequency = 1.0;
-            s.Slider.IsSnapToTickEnabled = true;
-            // Normalize loaded configs that still store fractional values (target display/step is x.00).
-            s.Slider.Value = Math.Round(s.Slider.Value);
-        }
-
         private async Task ResetToMouseEvent()
         {
             await Task.Delay(500);
@@ -927,67 +942,6 @@ namespace Aimmy2.Controls
         {
             // Save minimize states before disposing
             SaveMinimizeStatesToGlobal();
-        }
-
-        private void ClearGunConfigAssignment(string fileLocationKey, AFileLocator? locator)
-        {
-            locator?.ClearLocation();
-            SaveDictionary.WriteJSON(Dictionary.filelocationState, "bin\\filelocations.cfg");
-            new NoticeBar(
-                $"[{fileLocationKey}] No file located — assignment cleared. Your .cfg file was not deleted.",
-                4000,
-                NoticeType.Warning).Show();
-        }
-
-        private void LoadGunConfigFromPath(string key)
-        {
-            if (!Dictionary.filelocationState.TryGetValue(key, out var configPath))
-            {
-                new NoticeBar($"[{key}] No file located.", 2500, NoticeType.Warning).Show();
-                return;
-            }
-
-            var path = configPath?.ToString();
-            if (string.IsNullOrWhiteSpace(path))
-            {
-                new NoticeBar($"[{key}] No file located.", 2500, NoticeType.Warning).Show();
-                return;
-            }
-
-            _mainWindow?.LoadAntiRecoilConfig(path, loading_outside_startup: true, fromGunKeybind: false);
-        }
-
-        private static void BindAntiRecoilSlider(ASlider? slider, string settingKey, double fallback)
-        {
-            if (slider == null) return;
-
-            double initialValue = fallback;
-            if (Dictionary.AntiRecoilSettings.TryGetValue(settingKey, out var saved))
-            {
-                initialValue = Convert.ToDouble(saved);
-            }
-            else
-            {
-                Dictionary.AntiRecoilSettings[settingKey] = fallback;
-            }
-
-            slider.Slider.Value = initialValue;
-            slider.Slider.ValueChanged += (s, e) =>
-            {
-                Dictionary.AntiRecoilSettings[settingKey] = slider.Slider.Value;
-            };
-        }
-
-        private void SafeLoadSection(Action loadAction)
-        {
-            try
-            {
-                loadAction();
-            }
-            catch (Exception ex)
-            {
-                LogManager.Log(LogManager.LogLevel.Warning, $"Aim section failed to load: {ex.Message}", true);
-            }
         }
 
         #endregion
@@ -1023,13 +977,7 @@ namespace Aimmy2.Controls
 
             public SectionBuilder AddKeyChanger(string title, Action<AKeyChanger>? configure = null, string? defaultKey = null, string? tooltip = null)
             {
-                var key = defaultKey;
-                if (string.IsNullOrWhiteSpace(key))
-                {
-                    key = Dictionary.bindingSettings.TryGetValue(title, out var savedKey) && !string.IsNullOrWhiteSpace(savedKey)
-                        ? savedKey
-                        : "None";
-                }
+                var key = defaultKey ?? Dictionary.bindingSettings[title];
                 var keyChanger = _parent.CreateKeyChanger(title, key, tooltip);
                 configure?.Invoke(keyChanger);
                 _panel.Children.Add(keyChanger);
@@ -1096,11 +1044,6 @@ namespace Aimmy2.Controls
             _mainWindow!.toggleInstances[title] = toggle;
 
             // Set initial state
-            if (!Dictionary.toggleState.ContainsKey(title))
-            {
-                Dictionary.toggleState[title] = false;
-            }
-
             if (Dictionary.toggleState[title])
                 toggle.EnableSwitch();
             else
@@ -1162,10 +1105,6 @@ namespace Aimmy2.Controls
         private AColorChanger CreateColorChanger(string title)
         {
             var colorChanger = new AColorChanger(title);
-            if (!Dictionary.colorState.ContainsKey(title))
-            {
-                Dictionary.colorState[title] = "#FFFFFFFF";
-            }
             colorChanger.ColorChangingBorder.Background =
                 (Brush)new BrushConverter().ConvertFromString(Dictionary.colorState[title]);
             return colorChanger;
@@ -1174,4 +1113,3 @@ namespace Aimmy2.Controls
         #endregion
     }
 }
-

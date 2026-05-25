@@ -3,7 +3,6 @@ using System.Diagnostics;
 using System.IO;
 using System.IO.Compression;
 using System.Net.Http;
-using Visuality;
 
 namespace Other
 {
@@ -41,11 +40,11 @@ namespace Other
         public async Task CheckForUpdate(string currentVersion)
         {
             GithubManager githubManager = new();
-            var (latestVersion, latestZipUrl) = await githubManager.GetLatestReleaseInfo("Issamsidena", "Aimmy");
+            var (latestVersion, latestZipUrl) = await githubManager.GetLatestReleaseInfo("Babyhamsta", "Aimmy");
 
             if (string.IsNullOrEmpty(latestVersion) || string.IsNullOrEmpty(latestZipUrl))
             {
-                new NoticeBar("Failed to get latest release information from Github.", 5000).Show();
+                LogManager.Log(LogManager.LogLevel.Error, "Failed to get latest release information from Github.", true);
                 return;
             }
 
@@ -54,17 +53,17 @@ namespace Other
 
             if (comparison == 0)
             {
-                githubManager.Dispose();
+                LogManager.Log(LogManager.LogLevel.Info, "You are up to date.", true);
                 return;
             }
             else if (comparison > 0)
             {
-                githubManager.Dispose();
+                LogManager.Log(LogManager.LogLevel.Info, $"You are running a newer version ({currentVersion}) than the latest release ({latestVersion}).", true);
                 return;
             }
 
             // Only update if latest version is newer
-            new NoticeBar("An update was found, downloading the update from Github.", 5000).Show();
+            LogManager.Log(LogManager.LogLevel.Info, $"A new version is available: {latestVersion}. Current version: {currentVersion}.", true);
             githubManager.Dispose();
             await DoUpdate(latestZipUrl);
         }

@@ -1,4 +1,4 @@
-using Aimmy2.Class;
+﻿using Aimmy2.Class;
 using System.Diagnostics;
 using System.IO;
 using System.Windows;

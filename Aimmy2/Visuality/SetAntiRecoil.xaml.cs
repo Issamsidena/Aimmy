@@ -1,16 +1,14 @@
-﻿using Aimmy2;
+using Aimmy2;
 using Aimmy2.Class;
 using Aimmy2.Theme;
 using AimmyWPF.Class;
+using Class;
 using InputLogic;
 using System.Windows;
 using System.Windows.Threading;
 
 namespace Visuality
 {
-    /// <summary>
-    /// Interaction logic for SetAntiRecoil.xaml
-    /// </summary>
     public partial class SetAntiRecoil : Window
     {
         private MainWindow MainWin { get; set; }
@@ -24,7 +22,6 @@ namespace Visuality
             InitializeComponent();
 
             MW.WindowState = WindowState.Minimized;
-
             MainWin = MW;
 
             BulletBorder.Opacity = 0;
@@ -34,29 +31,22 @@ namespace Visuality
             HoldDownTimer.Interval = TimeSpan.FromMilliseconds(1);
             HoldDownTimer.Start();
 
-            ChangingFireRate = (int)Dictionary.AntiRecoilSettings["Fire Rate"];
+            ChangingFireRate = (int)Convert.ToDouble(Dictionary.AntiRecoilSettings["Fire Rate"]);
 
-            // Initialize theme colors
             UpdateThemeColors();
-
-            // Subscribe to theme changes
             ThemeManager.RegisterElement(this);
             ThemeManager.ThemeChanged += OnThemeChanged;
         }
 
-        private void OnThemeChanged(object sender, System.Windows.Media.Color newColor)
+        private void OnThemeChanged(object? sender, System.Windows.Media.Color newColor)
         {
-            Dispatcher.Invoke(() =>
-            {
-                UpdateThemeColors();
-            });
+            Dispatcher.Invoke(UpdateThemeColors);
         }
 
         private void UpdateThemeColors()
         {
-            // Update gradient colors
-            TopGradientStop.Color = ThemeManager.ThemeColorDark;
-            ThemeGradientStop.Color = ThemeManager.ThemeColorDark;
+            TopGradientStop.Color = ThemeManager.ThemeGradientDark;
+            ThemeGradientStop.Color = ThemeManager.ThemeGradientDark;
         }
 
         private void HoldDownTimerTicker(object? sender, EventArgs e)
@@ -93,7 +83,7 @@ namespace Visuality
 
         private void UpdateFireRate()
         {
-            if (BulletNumberTextbox.Text != null && BulletNumberTextbox.Text.Any(char.IsDigit))
+            if (!string.IsNullOrEmpty(BulletNumberTextbox.Text) && BulletNumberTextbox.Text.Any(char.IsDigit))
             {
                 ChangingFireRate = (int)(FireRate / Convert.ToInt64(BulletNumberTextbox.Text));
             }
@@ -107,8 +97,11 @@ namespace Visuality
 
         private void ConfirmB_Click(object sender, RoutedEventArgs e)
         {
-            Dictionary.AntiRecoilSettings["Fire Rate"] = ChangingFireRate;
-            MainWin.uiManager.S_FireRate!.Slider.Value = ChangingFireRate;
+            Dictionary.AntiRecoilSettings["Fire Rate"] = (double)ChangingFireRate;
+            if (MainWin.uiManager.S_FireRate != null)
+            {
+                MainWin.uiManager.S_FireRate.Slider.Value = ChangingFireRate;
+            }
 
             MainWin.WindowState = WindowState.Normal;
 
@@ -119,7 +112,7 @@ namespace Visuality
 
         private void TryAgainB_Click(object sender, RoutedEventArgs e)
         {
-            SettingLabel.Content = $"Press and hold the mouse button the bullet is removed.";
+            SettingLabel.Content = "Press and hold the mouse button until the bullet is removed.";
 
             Animator.FadeOut(BulletBorder);
             Animator.ObjectShift(TimeSpan.FromMilliseconds(350), BulletBorder, BulletBorder.Margin, new Thickness(0, 0, 0, -140));
@@ -129,7 +122,6 @@ namespace Visuality
 
         protected override void OnClosed(EventArgs e)
         {
-            // Unregister from theme manager
             ThemeManager.ThemeChanged -= OnThemeChanged;
             ThemeManager.UnregisterElement(this);
             base.OnClosed(e);

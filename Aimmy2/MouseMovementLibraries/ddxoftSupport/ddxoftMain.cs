@@ -1,8 +1,8 @@
-﻿using System.IO;
+﻿using Other;
+using System.IO;
 using System.Net.Http;
 using System.Security.Principal;
 using System.Windows;
-using Visuality;
 
 namespace MouseMovementLibraries.ddxoftSupport
 {
@@ -16,7 +16,7 @@ namespace MouseMovementLibraries.ddxoftSupport
         {
             try
             {
-                new NoticeBar($"{ddxoftpath} is missing, attempting to download {ddxoftpath}.", 4000).Show();
+                LogManager.Log(LogManager.LogLevel.Info, $"{ddxoftpath} is missing, attempting to download {ddxoftpath}.", true);
 
                 using HttpClient httpClient = new();
 
@@ -25,12 +25,12 @@ namespace MouseMovementLibraries.ddxoftSupport
                 {
                     var content = await response.Content.ReadAsByteArrayAsync();
                     await File.WriteAllBytesAsync(ddxoftpath, content);
-                    new NoticeBar($"{ddxoftpath} has downloaded successfully, please re-select ddxoft Virtual Input Driver to load the DLL.", 4000).Show();
+                    LogManager.Log(LogManager.LogLevel.Info, $"{ddxoftpath}has downloaded successfully, please re-select ddxoft Virtual Input Driver to load the DLL.", true);
                 }
             }
             catch
             {
-                new NoticeBar($"{ddxoftpath} has failed to install, please try a different Mouse Movement Method.", 4000).Show();
+                LogManager.Log(LogManager.LogLevel.Error, $"{ddxoftpath} has failed to download, please try a different Mouse Movement Method.", true);
             }
         }
 

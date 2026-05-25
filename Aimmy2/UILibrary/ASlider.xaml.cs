@@ -1,8 +1,6 @@
-using System.Windows;
+﻿using Aimmy2.Theme;
 using System.Windows.Controls;
 using System.Windows.Input;
-using System.Windows.Media;
-using Aimmy2.Theme;
 
 namespace Aimmy2.UILibrary
 {
@@ -11,15 +9,19 @@ namespace Aimmy2.UILibrary
     /// </summary>
     public partial class ASlider : UserControl
     {
-        private string title;
-        private string label;
-        private double buttonSteps;
-
-        public ASlider(string Text, string NotifierText, double ButtonSteps, string? tooltip)
+        public ASlider(string Text, string NotifierText, double ButtonSteps, string? tooltip = null)
         {
             InitializeComponent();
 
             SliderTitle.Content = Text;
+
+            if (!string.IsNullOrEmpty(tooltip))
+            {
+                var tt = new System.Windows.Controls.ToolTip { Content = tooltip };
+                if (TryFindResource("Tooltip") is System.Windows.Style style)
+                    tt.Style = style;
+                ToolTip = tt;
+            }
 
             Slider.ValueChanged += (s, e) =>
             {
@@ -29,43 +31,17 @@ namespace Aimmy2.UILibrary
             SubtractOne.Click += (s, e) => UpdateSliderValue(-ButtonSteps);
             AddOne.Click += (s, e) => UpdateSliderValue(ButtonSteps);
 
-            // Keep +/- square buttons synced with current theme color.
-            ApplyThemeToStepButtons();
-            ThemeManager.ThemeChanged += OnThemeChanged;
-            Unloaded += (s, e) => ThemeManager.ThemeChanged -= OnThemeChanged;
-
-            if (!string.IsNullOrEmpty(tooltip))
+            // Register buttons for theme updates when loaded
+            Loaded += (s, e) =>
             {
-                var tt = new ToolTip { Content = tooltip };
-                if (TryFindResource("Tooltip") is Style style)
-                    tt.Style = style;
-                ToolTip = tt;
-            }
-        }
-
-        public ASlider(string title, string label, double buttonSteps)
-        {
-            this.title = title;
-            this.label = label;
-            this.buttonSteps = buttonSteps;
-        }
-
-        private void OnThemeChanged(object? sender, Color e)
-        {
-            ApplyThemeToStepButtons();
-        }
-
-        private void ApplyThemeToStepButtons()
-        {
-            var brush = new SolidColorBrush(ThemeManager.ThemeColor);
-            SubtractOne.Background = brush;
-            AddOne.Background = brush;
+                ThemeManager.RegisterElement(SubtractOne);
+                ThemeManager.RegisterElement(AddOne);
+            };
         }
 
         private void UpdateSliderValue(double change)
         {
-            // Preserve full floating-point precision; do not round/quantize slider values internally.
-            Slider.Value = Slider.Value + change;
+            Slider.Value = Math.Round(Slider.Value + change, 2);
         }
 
         private void Slider_MouseUp(object sender, MouseButtonEventArgs e)

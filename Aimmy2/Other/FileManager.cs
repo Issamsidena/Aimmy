@@ -1,12 +1,10 @@
-using Aimmy2.AILogic;
+﻿using Aimmy2.AILogic;
 using Aimmy2.Class;
 using Aimmy2.Other;
 using Class;
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
-using Visuality;
-using static Aimmy2.Other.GithubManager;
 
 namespace Other
 {
@@ -40,7 +38,7 @@ namespace Other
             ConfigListBox.SelectionChanged += ConfigListBox_SelectionChanged;
 
             ModelListBox.AllowDrop = true;
-            ModelListBox.DragOver += ModelListBox_DragOver; 
+            ModelListBox.DragOver += ModelListBox_DragOver;
             ModelListBox.Drop += ModelListBox_DragDrop;
 
             ConfigListBox.AllowDrop = true;
@@ -57,7 +55,7 @@ namespace Other
         private void CheckForRequiredFolders()
         {
             string baseDir = AppDomain.CurrentDomain.BaseDirectory;
-            string[] dirs = ["bin\\models", "bin\\images", "bin\\labels", "bin\\configs", "bin\\anti_recoil_configs"];
+            string[] dirs = ["bin\\models", "bin\\images", "bin\\labels", "bin\\configs"];
 
             try
             {
@@ -94,7 +92,7 @@ namespace Other
             Dictionary.lastLoadedModel = selectedModel;
 
             // Store original values and disable them temporarily
-            var toggleKeys = new[] { "Aim Assist", "Constant AI Tracking", "Auto Trigger", "Constant AI Shooting", "Show Detected Player", "Show AI Confidence", "Show Tracers" };
+            var toggleKeys = new[] { "Aim Assist", "Constant AI Tracking", "Auto Trigger", "Show Detected Player", "Show AI Confidence", "Show Tracers" };
             var originalToggleStates = toggleKeys.ToDictionary(key => key, key => Dictionary.toggleState[key]);
             foreach (var key in toggleKeys)
             {
@@ -116,7 +114,7 @@ namespace Other
 
             string content = "Loaded Model: " + selectedModel;
             SelectedModelNotifier.Content = content;
-            new NoticeBar(content, 2000).Show();
+            LogManager.Log(LogManager.LogLevel.Info, content, true, 2000);
         }
 
         private void ConfigListBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -126,6 +124,7 @@ namespace Other
 
             string configPath = Path.Combine("bin/configs", selectedConfig);
 
+            SaveDictionary.LoadJSON(Dictionary.sliderSettings, configPath);
             PropertyChanger.PostNewConfig(configPath, true);
 
             SelectedConfigNotifier.Content = "Loaded Config: " + selectedConfig;
@@ -161,6 +160,7 @@ namespace Other
                 watcher.Renamed += LoadConfigsIntoListBox;
             }
         }
+
         private void ModelListBox_DragOver(object sender, DragEventArgs e)
         {
             if (e.Data.GetDataPresent(DataFormats.FileDrop))

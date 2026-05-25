@@ -10,6 +10,8 @@
                   VerticalScrollBarVisibility="Auto"
                   PanningMode="VerticalOnly">
         <StackPanel Margin="20">
+
+            <!-- Hero Section -->
             <Border Background="#15FFFFFF"
                     BorderBrush="#3FFFFFFF"
                     BorderThickness="1"
@@ -17,6 +19,7 @@
                     Padding="24"
                     Margin="0,0,0,16">
                 <StackPanel HorizontalAlignment="Center">
+                    <!-- Free Notice -->
                     <StackPanel Orientation="Horizontal"
                                 HorizontalAlignment="Center"
                                 Margin="0,0,0,12">
@@ -33,6 +36,8 @@
                                VerticalAlignment="Center"
                                Padding="0"/>
                     </StackPanel>
+
+                    <!-- Logo -->
                     <Path x:Name="AboutAimmyLogo"
                           Fill="White"
                           Stretch="Fill"
@@ -45,6 +50,8 @@
                                           FillRule="NonZero" />
                         </Path.Data>
                     </Path>
+
+                    <!-- Title & Version -->
                     <TextBlock Text="Aimmy"
                                FontFamily="{StaticResource Atkinson Hyperlegible}"
                                FontSize="24"
@@ -65,12 +72,14 @@
                             Cursor="Hand"
                             MouseLeftButtonUp="VersionBorder_Click">
                         <Label x:Name="AboutDesc"
-                               Content="v2.6.5"
+                               Content="v2.7.0"
                                FontFamily="{StaticResource Atkinson Hyperlegible}"
                                FontSize="11"
                                Foreground="White"
                                Padding="0"/>
                     </Border>
+
+                    <!-- System Specs -->
                     <Label x:Name="AboutSpecs"
                            Content="Intel I5-13400F | NVIDIA GTX 1050"
                            FontFamily="{StaticResource Atkinson Hyperlegible}"
@@ -79,6 +88,8 @@
                            HorizontalAlignment="Center"
                            Margin="0,12,0,0"
                            Padding="0"/>
+
+                    <!-- Update Button -->
                     <Ant:Button x:Name="CheckForUpdates"
                                 Background="#20FFFFFF"
                                 BorderBrush="Transparent"
@@ -96,6 +107,8 @@
                                 Click="CheckForUpdates_Click" />
                 </StackPanel>
             </Border>
+
+            <!-- Core Team Section -->
             <Border Background="#10FFFFFF"
                     BorderBrush="#3FFFFFFF"
                     BorderThickness="1"
@@ -110,11 +123,15 @@
                                Foreground="#60FFFFFF"
                                Margin="0,0,0,16"
                                HorizontalAlignment="Center"/>
+
+                    <!-- Developers Container - populated from code -->
                     <UniformGrid x:Name="CoreTeamPanel"
                                  Columns="3"
                                  HorizontalAlignment="Center"/>
                 </StackPanel>
             </Border>
+
+            <!-- Key Contributors Section -->
             <Border Background="#10FFFFFF"
                     BorderBrush="#3FFFFFFF"
                     BorderThickness="1"
@@ -129,13 +146,19 @@
                                Foreground="#60FFFFFF"
                                Margin="0,0,0,12"
                                HorizontalAlignment="Center"/>
+
+                    <!-- Highlighted Contributors - populated from code -->
                     <WrapPanel x:Name="HighlightedContributorsPanel"
                                HorizontalAlignment="Center"
                                Margin="0,0,0,8"/>
+
+                    <!-- Other Contributors - populated from code -->
                     <WrapPanel x:Name="ContributorsPanel"
                                HorizontalAlignment="Center"/>
                 </StackPanel>
             </Border>
+
+            <!-- Community Section -->
             <Border Background="#08FFFFFF"
                     BorderBrush="#3FFFFFFF"
                     BorderThickness="1"
@@ -156,6 +179,8 @@
                                HorizontalAlignment="Center"/>
                 </StackPanel>
             </Border>
+
+            <!-- GitHub Link -->
             <Ant:Button x:Name="GitHubButton"
                         Background="#15FFFFFF"
                         BorderBrush="Transparent"
@@ -180,6 +205,8 @@
                                VerticalAlignment="Center"/>
                 </StackPanel>
             </Ant:Button>
+
+            <!-- Discord Link -->
             <Ant:Button x:Name="DiscordButton"
                         Background="#5865F2"
                         BorderBrush="Transparent"
@@ -203,6 +230,7 @@
                                VerticalAlignment="Center"/>
                 </StackPanel>
             </Ant:Button>
+
         </StackPanel>
     </ScrollViewer>
 </UserControl>

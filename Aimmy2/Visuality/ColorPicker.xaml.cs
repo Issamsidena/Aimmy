@@ -1,4 +1,4 @@
-using Aimmy2.Theme;
+﻿using Aimmy2.Theme;
 using System.Windows;
 using System.Windows.Input;
 using System.Windows.Media;
@@ -7,18 +7,26 @@ namespace UISections
 {
     public partial class ColorPicker : Window
     {
+        //--
         public Color SelectedColor { get; private set; }
         public event Action<Color> ColorChanged;
+        //--
         private Color ThemeGradientColor => ThemeManager.ThemeColorDark;
         private double currentGradientAngle = 0;
+        //==
         public string ColorPickerTitle { get; set; } = "Theme Color";
-
+        //--
         public ColorPicker(Color initialColor, string title = "Theme Color")
         {
             InitializeComponent();
+            //--
             ColorPickerTitle = title;
             ColorWheelControl.Title = ColorPickerTitle;
             ColorWheelControl.SuppressThemeApply = true;
+            //--
+
+            //Every .xaml with a border named "MainBorder" gets changed as long as this is visible, so double check! - Yes i copied and pasted this comment, i couldn't find anything better to say, ugh.
+            ThemeManager.TrackWindow(this);
 
             ThemeManager.RegisterElement(this);
             ThemeManager.RegisterElement(ColorWheelControl);
@@ -43,6 +51,7 @@ namespace UISections
 
             UpdateThemeColors();
         }
+
 
         private void OnThemeChanged(object sender, Color newColor)
         {
@@ -76,7 +85,9 @@ namespace UISections
                 SelectedColor = ColorWheelControl.GetCurrentPreviewColor();
                 ColorChanged?.Invoke(SelectedColor);
             };
+
         }
+
 
         private T GetPrivateField<T>(string fieldName)
         {
@@ -85,7 +96,6 @@ namespace UISections
                 return (T)field.GetValue(ColorWheelControl);
             return default;
         }
-
         private Color HsvToRgb(double hue, double saturation, double value)
         {
             int hi = (int)(hue / 60) % 6;
@@ -107,6 +117,8 @@ namespace UISections
                 _ => Color.FromRgb(v, p, q),
             };
         }
+
+
 
         private void Exit_Click(object sender, RoutedEventArgs e)
         {
@@ -144,5 +156,7 @@ namespace UISections
 
             RotaryGradient.Angle = currentGradientAngle;
         }
+
+
     }
 }

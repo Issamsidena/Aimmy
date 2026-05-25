@@ -1,21 +1,15 @@
-namespace Aimmy2.UILibrary
+﻿namespace Aimmy2.UILibrary
 {
     /// <summary>
     /// Interaction logic for APButton.xaml
     /// </summary>
     public partial class APButton : System.Windows.Controls.UserControl
     {
-        private string v;
-
-        public APButton(string v)
-        {
-            this.v = v;
-        }
-
-        public APButton(string Text, string? tooltip)
+        public APButton(string Text, string? tooltip = null)
         {
             InitializeComponent();
             ButtonTitle.Content = Text;
+
             if (!string.IsNullOrEmpty(tooltip))
             {
                 var tt = new System.Windows.Controls.ToolTip { Content = tooltip };

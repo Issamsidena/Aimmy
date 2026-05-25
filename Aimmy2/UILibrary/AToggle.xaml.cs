@@ -1,8 +1,8 @@
+﻿using Aimmy2.Theme;
 using AimmyWPF.Class;
 using System.Windows;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
-using Aimmy2.Theme;
 
 namespace Aimmy2.UILibrary
 {
@@ -14,12 +14,19 @@ namespace Aimmy2.UILibrary
         private static readonly Color DisableColor = Colors.White;
         private static readonly TimeSpan AnimationDuration = TimeSpan.FromMilliseconds(500);
         private bool _isEnabled = false;
-        private string title;
 
-        public AToggle(string Text, string? tooltip)
+        public AToggle(string Text, string? tooltip = null)
         {
             InitializeComponent();
             ToggleTitle.Content = Text;
+
+            if (!string.IsNullOrEmpty(tooltip))
+            {
+                var tt = new System.Windows.Controls.ToolTip { Content = tooltip };
+                if (TryFindResource("Tooltip") is Style style)
+                    tt.Style = style;
+                ToolTip = tt;
+            }
 
             // Subscribe to theme change events
             ThemeManager.ThemeChanged += OnThemeChanged;
@@ -29,19 +36,6 @@ namespace Aimmy2.UILibrary
 
             // Cleanup on unload
             this.Unloaded += (s, e) => ThemeManager.ThemeChanged -= OnThemeChanged;
-
-            if (!string.IsNullOrEmpty(tooltip))
-            {
-                var tt = new System.Windows.Controls.ToolTip { Content = tooltip };
-                if (TryFindResource("Tooltip") is Style style)
-                    tt.Style = style;
-                ToolTip = tt;
-            }
-        }
-
-        public AToggle(string title)
-        {
-            this.title = title;
         }
 
         private void OnThemeChanged(object sender, Color newThemeColor)

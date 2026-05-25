@@ -41,7 +41,7 @@
                     </LinearGradientBrush.RelativeTransform>
                     <GradientStop Color="Black"
                                   Offset="0.27" />
-                    <GradientStop Color="#FF120338"
+                    <GradientStop x:Name="ThemeGradientStop" Color="#FF120338"
                                   Offset="1" />
                 </LinearGradientBrush>
             </Border.Background>

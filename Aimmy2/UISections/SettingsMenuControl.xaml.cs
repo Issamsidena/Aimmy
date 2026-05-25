@@ -1,4 +1,4 @@
-using Aimmy2.AILogic;
+﻿using Aimmy2.AILogic;
 using Aimmy2.Class;
 using Aimmy2.UILibrary;
 using Other;
@@ -46,10 +46,10 @@ namespace Aimmy2.Controls
             // Load minimize states from global dictionary if they exist
             LoadMinimizeStatesFromGlobal();
 
-            SafeLoadSection(LoadModelSettings);
-            SafeLoadSection(LoadSettingsConfig);
-            SafeLoadSection(LoadThemeMenu);
-            SafeLoadSection(LoadDisplaySelectMenu);
+            LoadModelSettings();
+            LoadSettingsConfig();
+            LoadThemeMenu();
+            LoadDisplaySelectMenu();
 
             // Apply minimize states after loading
             ApplyMinimizeStates();
@@ -57,6 +57,15 @@ namespace Aimmy2.Controls
             // Subscribe to display changes
             DisplayManager.DisplayChanged += OnDisplayChanged;
 
+            // Subscribe to AI class updates for Target Class dropdown
+            AIManager.ClassesUpdated += OnClassesChanged;
+
+            // Subscribe to dynamic model status changes
+            AIManager.DynamicModelStatusChanged += OnDynamicModelStatusChanged;
+
+            // Set visibility based on current model status (handles case where model loaded before panel opened)
+            UpdateDynamicModelDropdownsVisibility(AIManager.CurrentModelIsDynamic);
+            UpdateTargetClassDropdown(_mainWindow!.uiManager.D_TargetClass!);
         }
 
         #region Minimize State Management
@@ -138,16 +147,93 @@ namespace Aimmy2.Controls
                     uiManager.AT_ModelSettings = t;
                     t.Minimize.Click += (s, e) => TogglePanel("Model Settings", ModelSettingsPanel);
                 })
+                .AddDropdown("Image Size", d =>
+                {
+                    uiManager.D_ImageSize = d;
+
+                    // Add size options
+                    _mainWindow.AddDropdownItem(d, "640");
+                    _mainWindow.AddDropdownItem(d, "512");
+                    _mainWindow.AddDropdownItem(d, "416");
+                    _mainWindow.AddDropdownItem(d, "320");
+                    _mainWindow.AddDropdownItem(d, "256");
+                    _mainWindow.AddDropdownItem(d, "160");
+
+                    // Set default to current value
+                    var currentSize = Dictionary.dropdownState["Image Size"];
+                    for (int i = 0; i < d.DropdownBox.Items.Count; i++)
+                    {
+                        if ((d.DropdownBox.Items[i] as ComboBoxItem)?.Content?.ToString() == currentSize)
+                        {
+                            d.DropdownBox.SelectedIndex = i;
+                            break;
+                        }
+                    }
+
+                    // Handle selection change
+                    d.DropdownBox.SelectionChanged += async (s, e) =>
+                    {
+                        if (d.DropdownBox.SelectedItem == null || e.AddedItems.Count == 0)
+                            return;
+
+                        var newSize = (d.DropdownBox.SelectedItem as ComboBoxItem)?.Content?.ToString();
+                        if (string.IsNullOrEmpty(newSize))
+                            return;
+
+                        // Check if model is loaded
+                        if (FileManager.AIManager == null || Dictionary.lastLoadedModel == "N/A")
+                        {
+                            // No model loaded, just update the dictionary
+                            Dictionary.dropdownState["Image Size"] = newSize;
+                            LogManager.Log(LogLevel.Info, $"Image size set to {newSize}x{newSize} (no model loaded)", true, 2000);
+                            return;
+                        }
+
+                        FileManager.CurrentlyLoadingModel = true;
+                        LogManager.Log(LogLevel.Info, $"Image size changing to {newSize}");
+
+                        try
+                        {
+                            // Signal the AI to prepare for shutdown
+                            if (FileManager.AIManager != null)
+                            {
+                                FileManager.AIManager.RequestSizeChange(int.Parse(newSize));
+                                await Task.Delay(100); // Give AI loop time to pause
+                            }
+
+                            // Dispose the current AIManager
+                            var modelPath = System.IO.Path.Combine("bin/models", Dictionary.lastLoadedModel);
+                            FileManager.AIManager?.Dispose();
+                            FileManager.AIManager = null;
+
+                            // NOW it's safe to update the dictionary
+                            Dictionary.dropdownState["Image Size"] = newSize;
+
+                            // Create new AIManager with the new size
+                            FileManager.AIManager = new AIManager(modelPath);
+
+                            LogManager.Log(LogLevel.Info, $"Successfully changed image size to {newSize}x{newSize}", true, 2000);
+                        }
+                        catch (Exception ex)
+                        {
+                            LogManager.Log(LogLevel.Error, $"Error changing image size: {ex.Message}", true, 5000);
+                        }
+                        finally
+                        {
+                            FileManager.CurrentlyLoadingModel = false;
+                        }
+                    };
+                }, tooltip: "Resolution the AI uses for detection. Smaller = faster but less accurate.")
+                .AddDropdown("Target Class", d =>
+                {
+                    d.DropdownBox.SelectedIndex = 0;
+                    uiManager.D_TargetClass = d;
+                    _mainWindow.AddDropdownItem(d, "Smart Detection");
+                    UpdateTargetClassDropdown(d);
+                }, tooltip: "Which type of target to aim at. Smart Detection picks the most certain detection.")
                 .AddSlider("AI Minimum Confidence", "% Confidence", 1, 1, 1, 100, s =>
                 {
                     uiManager.S_AIMinimumConfidence = s;
-                    // Whole percentages only (e.g. 54.00 — no 54.65).
-                    s.Slider.TickFrequency = 1.0;
-                    s.Slider.IsSnapToTickEnabled = true;
-                    var rounded = Math.Round(s.Slider.Value);
-                    if (Math.Abs(s.Slider.Value - rounded) > double.Epsilon)
-                        s.Slider.Value = rounded;
-
                     s.Slider.PreviewMouseLeftButtonUp += (sender, e) =>
                     {
                         var value = s.Slider.Value;
@@ -218,37 +304,30 @@ namespace Aimmy2.Controls
                     tooltip: "Hide the overlay from screen recordings and streams.")
                 .AddSeparator();
 
-            try
+            // Handle DisplaySelector separately as it's a custom control
+            uiManager.DisplaySelector = new ADisplaySelector();
+            uiManager.DisplaySelector.RefreshDisplays();
+
+            // Insert after title but before separator
+            var insertIndex = DisplaySelectMenu.Children.Count - 2;
+            DisplaySelectMenu.Children.Insert(insertIndex, uiManager.DisplaySelector);
+
+            // Add refresh button after DisplaySelector
+            var refreshButton = new APButton("Refresh Displays", "Update the list of available monitors.");
+            refreshButton.Reader.Click += (s, e) =>
             {
-                // Handle DisplaySelector separately as it's a custom control
-                uiManager.DisplaySelector = new ADisplaySelector();
-                uiManager.DisplaySelector.RefreshDisplays();
-
-                // Insert after title but before separator
-                var insertIndex = DisplaySelectMenu.Children.Count - 2;
-                DisplaySelectMenu.Children.Insert(insertIndex, uiManager.DisplaySelector);
-
-                // Add refresh button after DisplaySelector
-                var refreshButton = new APButton("Refresh Displays", "Update the list of available monitors.");
-                refreshButton.Reader.Click += (s, e) =>
+                try
                 {
-                    try
-                    {
-                        DisplayManager.RefreshDisplays();
-                        uiManager.DisplaySelector?.RefreshDisplays();
-                        LogManager.Log(LogLevel.Info, "Display list refreshed successfully.", true);
-                    }
-                    catch (Exception ex)
-                    {
-                        LogManager.Log(LogLevel.Error, $"Error refreshing displays: {ex.Message}", true);
-                    }
-                };
-                DisplaySelectMenu.Children.Insert(insertIndex + 1, refreshButton);
-            }
-            catch (Exception ex)
-            {
-                LogManager.Log(LogLevel.Warning, $"Display selector failed to initialize: {ex.Message}", true);
-            }
+                    DisplayManager.RefreshDisplays();
+                    uiManager.DisplaySelector.RefreshDisplays();
+                    LogManager.Log(LogLevel.Info, "Display list refreshed successfully.", true);
+                }
+                catch (Exception ex)
+                {
+                    LogManager.Log(LogLevel.Error, $"Error refreshing displays: {ex.Message}", true);
+                }
+            };
+            DisplaySelectMenu.Children.Insert(insertIndex + 1, refreshButton);
         }
 
         private void LoadThemeMenu()
@@ -265,25 +344,17 @@ namespace Aimmy2.Controls
                 })
                 .AddSeparator();
 
-            try
-            {
-                // Handle ColorWheel separately as it's a custom control
-                uiManager.ThemeColorWheel = new AColorWheel();
+            // Handle ColorWheel separately as it's a custom control
+            uiManager.ThemeColorWheel = new AColorWheel();
 
-                var arrowButton = uiManager.ThemeColorWheel.FindName("ArrowButton") as Button;
-                if (arrowButton != null)
-                {
-                    arrowButton.Visibility = Visibility.Visible;
-                }
+            //--
+            var arrowButton = uiManager.ThemeColorWheel.FindName("ArrowButton") as Button;
+            arrowButton.Visibility = Visibility.Visible;
+            //--
 
-                // Insert before separator
-                var insertIndex = ThemeMenu.Children.Count - 2;
-                ThemeMenu.Children.Insert(insertIndex, uiManager.ThemeColorWheel);
-            }
-            catch (Exception ex)
-            {
-                LogManager.Log(LogLevel.Warning, $"Theme wheel failed to initialize: {ex.Message}", true);
-            }
+            // Insert before separator
+            var insertIndex = ThemeMenu.Children.Count - 2;
+            ThemeMenu.Children.Insert(insertIndex, uiManager.ThemeColorWheel);
         }
 
         #endregion
@@ -316,26 +387,103 @@ namespace Aimmy2.Controls
             _mainWindow!.uiManager.D_MouseMovementMethod!.DropdownBox.SelectedIndex = 0;
         }
 
+        public void UpdateImageSizeDropdown(string newSize)
+        {
+            if (_mainWindow?.uiManager.D_ImageSize != null)
+            {
+                var dropdown = _mainWindow.uiManager.D_ImageSize;
+                for (int i = 0; i < dropdown.DropdownBox.Items.Count; i++)
+                {
+                    if ((dropdown.DropdownBox.Items[i] as ComboBoxItem)?.Content?.ToString() == newSize)
+                    {
+                        dropdown.DropdownBox.SelectedIndex = i;
+                        break;
+                    }
+                }
+            }
+        }
+
+        private void OnClassesChanged(Dictionary<int, string> classes)
+        {
+            Application.Current.Dispatcher.Invoke(() =>
+            {
+                if (_mainWindow?.uiManager.D_TargetClass != null)
+                {
+                    UpdateTargetClassDropdown(_mainWindow.uiManager.D_TargetClass, classes);
+                }
+            });
+        }
+
+        private void OnDynamicModelStatusChanged(bool isDynamic)
+        {
+            Application.Current.Dispatcher.Invoke(() =>
+            {
+                UpdateDynamicModelDropdownsVisibility(isDynamic);
+            });
+        }
+
+        private void UpdateDynamicModelDropdownsVisibility(bool isDynamic)
+        {
+            // Only Image Size depends on dynamic model - it's hidden for static models
+            // Target Class is always visible since both static and dynamic models can have multiple classes
+            var imageSizeVisibility = isDynamic ? Visibility.Visible : Visibility.Collapsed;
+
+            if (_mainWindow?.uiManager.D_ImageSize != null)
+            {
+                _mainWindow.uiManager.D_ImageSize.Visibility = imageSizeVisibility;
+            }
+        }
+
+        private void UpdateTargetClassDropdown(ADropdown dropdown, Dictionary<int, string>? _classes = null)
+        {
+            if (dropdown?.DropdownBox == null) return;
+            var visibility = _classes != null && _classes.Count > 1
+                ? Visibility.Visible
+                : Visibility.Collapsed;
+            dropdown.Visibility = visibility;
+            _mainWindow!.uiManager.D_TargetClass!.Visibility = visibility;
+
+            string? selection = (dropdown.DropdownBox.SelectedItem as ComboBoxItem)?.Content?.ToString();
+
+            var removedItems = dropdown.DropdownBox.Items.Cast<ComboBoxItem>()
+                .Where(item => item.Content?.ToString() != "Smart Detection")
+                .ToList();
+
+            foreach (var item in removedItems)
+            {
+                dropdown.DropdownBox.Items.Remove(item);
+            }
+
+            var classes = _classes ?? FileManager.AIManager?.ModelClasses ?? new Dictionary<int, string>();
+
+            foreach (var kvp in classes.OrderBy(x => x.Key))
+            {
+                _mainWindow!.AddDropdownItem(dropdown, kvp.Value);
+            }
+
+            if (!string.IsNullOrEmpty(selection)) // tries to restore the selection
+            {
+                for (int i = 0; i < dropdown.DropdownBox.Items.Count; i++)
+                {
+                    if ((dropdown.DropdownBox.Items[i] as ComboBoxItem)?.Content?.ToString() == selection)
+                    {
+                        dropdown.DropdownBox.SelectedIndex = i;
+                        return;
+                    }
+                }
+            }
+
+            dropdown.DropdownBox.SelectedIndex = 0;
+        }
 
         public void Dispose()
         {
             DisplayManager.DisplayChanged -= OnDisplayChanged;
+            AIManager.ClassesUpdated -= OnClassesChanged;
             _mainWindow?.uiManager.DisplaySelector?.Dispose();
 
             // Save minimize states before disposing
             SaveMinimizeStatesToGlobal();
-        }
-
-        private void SafeLoadSection(Action loadAction)
-        {
-            try
-            {
-                loadAction();
-            }
-            catch (Exception ex)
-            {
-                LogManager.Log(LogLevel.Warning, $"Settings section failed to load: {ex.Message}", true);
-            }
         }
 
         #endregion
@@ -348,11 +496,6 @@ namespace Aimmy2.Controls
             _mainWindow!.toggleInstances[title] = toggle;
 
             // Set initial state
-            if (!Dictionary.toggleState.ContainsKey(title))
-            {
-                Dictionary.toggleState[title] = false;
-            }
-
             if (Dictionary.toggleState[title])
                 toggle.EnableSwitch();
             else
@@ -445,13 +588,7 @@ namespace Aimmy2.Controls
 
             public SectionBuilder AddKeyChanger(string title, Action<AKeyChanger>? configure = null, string? defaultKey = null, string? tooltip = null)
             {
-                var key = defaultKey;
-                if (string.IsNullOrWhiteSpace(key))
-                {
-                    key = Dictionary.bindingSettings.TryGetValue(title, out var savedKey) && !string.IsNullOrWhiteSpace(savedKey)
-                        ? savedKey
-                        : "None";
-                }
+                var key = defaultKey ?? Dictionary.bindingSettings[title];
                 var keyChanger = _parent.CreateKeyChanger(title, key, tooltip);
                 configure?.Invoke(keyChanger);
                 _panel.Children.Add(keyChanger);
@@ -494,4 +631,3 @@ namespace Aimmy2.Controls
         #endregion
     }
 }
-

@@ -82,7 +82,21 @@ namespace Aimmy2.Class
         /// </summary>
         private static void OnDisplaySettingsChanged(object? sender, EventArgs e)
         {
-            RefreshDisplays();
+            // Add delay to ensure system has updated display info
+            Task.Delay(1000).ContinueWith(t =>
+            {
+                ForceRefresh();
+            });
+        }
+
+        public static void ForceRefresh()
+        {
+            lock (_lockObject)
+            {
+                RefreshDisplays();
+                LoadSavedDisplay();
+                ForceUpdateWindows();
+            }
         }
 
         /// <summary>

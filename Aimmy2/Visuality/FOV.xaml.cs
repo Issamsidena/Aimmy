@@ -1,6 +1,5 @@
-using Aimmy2.Class;
+﻿using Aimmy2.Class;
 using Aimmy2.Theme;
-using Aimmy2.UILibrary;
 using Class;
 using System.Runtime.InteropServices;
 using System.Windows;
@@ -117,13 +116,14 @@ namespace Visuality
             RectangleShape.Stroke = brush;
         }
 
+
         public void UpdateFOVSize(double newdouble)
         {
             Circle.Width = Circle.Height = newdouble;
             RectangleShape.Width = RectangleShape.Height = newdouble;
         }
 
-        // Clean up event subscription
+
         protected override void OnClosed(EventArgs e)
         {
             DisplayManager.DisplayChanged -= OnDisplayChanged;

@@ -28,15 +28,11 @@
     <UseWPF>true</UseWPF>
     <UseWindowsForms>false</UseWindowsForms>
     <Platforms>AnyCPU;x64</Platforms>	  <Product></Product>
-	  <Title></Title>
-	  <AssemblyName>YmmiaV2</AssemblyName>
-    <Version>2.6.5</Version>
-    <AssemblyVersion>2.6.5.0</AssemblyVersion>
-    <FileVersion>2.6.5.0</FileVersion>
+    <Title></Title>
+    <AssemblyName>YmmiaV2</AssemblyName>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <SignAssembly>False</SignAssembly>
     <RunPostBuildEvent>OnBuildSuccess</RunPostBuildEvent>
-  
   </PropertyGroup>
 
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|AnyCPU'">
@@ -61,28 +57,46 @@
     <None Include="..\.editorconfig" Link=".editorconfig" />
   </ItemGroup>
 
+  <!-- Reference-only backup folders kept inside the project tree. Excluded from compilation. -->
   <ItemGroup>
-    <PackageReference Include="Accord.Statistics" Version="3.8.0" />
+    <Compile Remove="AimmyV2.5.5\**" />
+    <Page Remove="AimmyV2.5.5\**" />
+    <ApplicationDefinition Remove="AimmyV2.5.5\**" />
+    <Resource Remove="AimmyV2.5.5\**" />
+    <None Remove="AimmyV2.5.5\**" />
+    <EmbeddedResource Remove="AimmyV2.5.5\**" />
+
+    <Compile Remove="AimmyV2 New\**" />
+    <Page Remove="AimmyV2 New\**" />
+    <ApplicationDefinition Remove="AimmyV2 New\**" />
+    <Resource Remove="AimmyV2 New\**" />
+    <None Remove="AimmyV2 New\**" />
+    <EmbeddedResource Remove="AimmyV2 New\**" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="AntWpf" Version="1.0.5" />
-    <PackageReference Include="Costura.Fody" Version="6.0.0">
+    <PackageReference Include="Costura.Fody" Version="6.2.0">
       <PrivateAssets>all</PrivateAssets>
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageReference>
-    <PackageReference Include="Fody" Version="6.9.2">
+    <PackageReference Include="Fody" Version="6.9.3">
       <PrivateAssets>all</PrivateAssets>
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageReference>
-    <PackageReference Include="MaterialDesignThemes" Version="5.2.1" />
-    <PackageReference Include="Microsoft.ML.OnnxRuntime.DirectML" Version="1.22.0" />
+    <PackageReference Include="MaterialDesignThemes" Version="5.3.2" />
+    <PackageReference Include="Microsoft.ML.OnnxRuntime.DirectML" Version="1.24.4" GeneratePathProperty="true" />
+    <PackageReference Include="Microsoft.AI.DirectML" Version="1.15.4" GeneratePathProperty="true" />
     <PackageReference Include="MouseKeyHook" Version="5.7.1" />
-    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
     <PackageReference Include="Supercluster.KDTree" Version="1.0.4" />
-    <PackageReference Include="System.Management" Version="9.0.5" />
+    <PackageReference Include="System.Management" Version="10.0.8" />
     <PackageReference Include="System.Net.Http" Version="4.3.4" />
     <PackageReference Include="System.Text.RegularExpressions" Version="4.3.1" />
-    <PackageReference Include="Vortice.Direct3D11" Version="3.6.2" />
-    <PackageReference Include="Vortice.DirectX" Version="3.6.2" />
-    <PackageReference Include="Vortice.DXGI" Version="3.6.2" />
+    <PackageReference Include="Vortice.Direct3D11" Version="3.8.3" />
+    <PackageReference Include="Vortice.Direct3D12" Version="3.8.3" />
+    <PackageReference Include="Vortice.DirectX" Version="3.8.3" />
+    <PackageReference Include="Vortice.DXGI" Version="3.8.3" />
     <PackageReference Include="XamlRadialProgressBar" Version="1.0.3" />
   </ItemGroup>
 
@@ -106,8 +120,8 @@
 	    <AutoGen>True</AutoGen>
 	    <DependentUpon>Settings.settings</DependentUpon>
 	  </Compile>
-	  <Compile Update="UILibrary\ACredit.xaml.cs">
-	    <SubType>Code</SubType>
+	  <Compile Update="Other\StreamGuardManager.cs">
+	    <Generator>MSBuild:Compile</Generator>
 	  </Compile>
 	  <Compile Update="UILibrary\AFileLocator.xaml.cs">
 	    <SubType>Code</SubType>
@@ -141,5 +155,25 @@
 	    <LastGenOutput>Settings.Designer.cs</LastGenOutput>
 	  </None>
 	</ItemGroup>
+
+  <!--
+    Ensure onnxruntime.dll / onnxruntime_providers_shared.dll / DirectML.dll
+    sit next to YmmiaV2.exe AND that the runtimes\win-x64\native\ folder is
+    also produced — for every Platform/Configuration (AnyCPU, x64, Debug,
+    Release). NuGet's default targets only copy native DLLs when a
+    RuntimeIdentifier is set; this Target makes the copy unconditional.
+  -->
+  <Target Name="CopyOnnxRuntimeNativeDlls" AfterTargets="Build">
+    <ItemGroup>
+      <_OnnxNative Include="$(PkgMicrosoft_ML_OnnxRuntime_DirectML)\runtimes\win-x64\native\*.dll" />
+      <_DirectMLNative Include="$(PkgMicrosoft_AI_DirectML)\bin\x64-win\DirectML.dll" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_OnnxNative);@(_DirectMLNative)"
+          DestinationFolder="$(OutDir)"
+          SkipUnchangedFiles="true" />
+    <Copy SourceFiles="@(_OnnxNative);@(_DirectMLNative)"
+          DestinationFolder="$(OutDir)runtimes\win-x64\native"
+          SkipUnchangedFiles="true" />
+  </Target>
 
 </Project>

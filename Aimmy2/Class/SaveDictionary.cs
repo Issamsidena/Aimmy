@@ -1,4 +1,5 @@
 ﻿using Newtonsoft.Json;
+using Other;
 using System.IO;
 using MessageBox = System.Windows.MessageBox;
 
@@ -13,9 +14,9 @@ namespace Class
             {
                 "bin",
                 "bin\\configs",
-                "bin\\anti_recoil_configs",
                 "bin\\labels",
-                "bin\\models"
+                "bin\\models",
+                "bin\\anti_recoil_configs"
             };
 
             foreach (var dir in requiredDirectories)
@@ -28,8 +29,7 @@ namespace Class
                     }
                     catch (Exception ex)
                     {
-                        // Log the error but don't crash - the app might still work without some directories
-                        System.Diagnostics.Debug.WriteLine($"Failed to create directory {dir}: {ex.Message}");
+                        LogManager.Log(LogManager.LogLevel.Error, $"Failed to create directory {dir}: {ex.Message}", true);
                     }
                 }
             }

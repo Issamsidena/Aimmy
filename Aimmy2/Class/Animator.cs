@@ -1,6 +1,5 @@
 ﻿using System.Windows;
 using System.Windows.Media.Animation;
-using System.Windows.Shapes;
 
 namespace AimmyWPF.Class
 {
@@ -61,6 +60,36 @@ namespace AimmyWPF.Class
             StoryBoard.Children.Remove(Animation);
         }
 
+        public static void WidthShift(Duration speed, FrameworkElement element, double originalSize, double newSize)
+        {
+            var animation = new DoubleAnimation
+            {
+                From = originalSize,
+                To = newSize,
+                Duration = speed,
+                EasingFunction = new QuarticEase()
+            };
+
+            element.BeginAnimation(FrameworkElement.WidthProperty, animation);
+        }
+
+        public static void HeightShift(Duration speed, FrameworkElement element, double originalSize, double newSize)
+        {
+            var animation = new DoubleAnimation
+            {
+                From = originalSize,
+                To = newSize,
+                Duration = speed,
+                EasingFunction = new QuarticEase()
+            };
+
+            element.BeginAnimation(FrameworkElement.HeightProperty, animation);
+        }
+
+
+
+        // This is old, replaced with new -- Saving it here tho just incase i run into problems.
+        /*
         public static void WidthShift(Duration speed, Ellipse Circle, double OriginalSize, double NewSize)
         {
             DoubleAnimation doubleanimation = new DoubleAnimation();
@@ -80,15 +109,6 @@ namespace AimmyWPF.Class
             doubleanimation.EasingFunction = new QuarticEase();
             Circle.BeginAnimation(FrameworkElement.HeightProperty, doubleanimation); ;
         }
-
-        internal static void WidthShift(TimeSpan duration, Rectangle rectangleShape, double actualWidth, double targetSize)
-        {
-            throw new NotImplementedException();
-        }
-
-        internal static void HeightShift(TimeSpan duration, Rectangle rectangleShape, double actualHeight, double targetSize)
-        {
-            throw new NotImplementedException();
-        }
+        */
     }
 }

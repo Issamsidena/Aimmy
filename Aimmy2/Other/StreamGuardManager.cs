@@ -1,4 +1,4 @@
-using System.Runtime.InteropServices;
+﻿using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Interop;
@@ -8,17 +8,23 @@ namespace Aimmy2.Other
 {
     public static class StreamGuardManager
     {
+        #region Constants
         const uint WDA_NONE = 0;
         const uint WDA_EXCLUDEFROMCAPTURE = 0x11;
         const int GWL_EXSTYLE = -20;
         const int WS_EX_TOOLWINDOW = 0x00000080;
         const int WS_EX_APPWINDOW = 0x00040000;
+        const uint GA_ROOT = 2;
+        #endregion
 
+        #region Private Fields
         private static bool _isEnabled = false;
         private static HashSet<nint> _protectedWindows = new();
         private static bool _eventsAttached = false;
         private static System.Windows.Threading.DispatcherTimer _popupMonitorTimer;
+        #endregion
 
+        #region P/Invoke Declarations
         private delegate bool EnumWindowsProc(nint hWnd, nint lParam);
 
         [DllImport("user32.dll")]
@@ -31,6 +37,12 @@ namespace Aimmy2.Other
         private static extern int SetWindowLong(nint hWnd, int nIndex, int dwNewLong);
 
         [DllImport("user32.dll")]
+        private static extern nint GetParent(nint hWnd);
+
+        [DllImport("user32.dll")]
+        private static extern nint GetAncestor(nint hWnd, uint gaFlags);
+
+        [DllImport("user32.dll")]
         private static extern bool EnumWindows(EnumWindowsProc enumProc, nint lParam);
 
         [DllImport("user32.dll")]
@@ -41,7 +53,9 @@ namespace Aimmy2.Other
 
         [DllImport("user32.dll")]
         private static extern bool IsWindowVisible(nint hWnd);
+        #endregion
 
+        #region Window Protection
         private static void ApplyToWindow(Window window, bool enable)
         {
             if (window == null) return;
@@ -134,7 +148,9 @@ namespace Aimmy2.Other
                 };
             }
         }
+        #endregion
 
+        #region Popup Window Protection
         private static void ProtectAllProcessWindows()
         {
             uint currentProcessId = (uint)System.Diagnostics.Process.GetCurrentProcess().Id;
@@ -182,11 +198,14 @@ namespace Aimmy2.Other
                 }
                 catch
                 {
+                    // Continue enumeration on error
                 }
                 return true;
             }, nint.Zero);
         }
+        #endregion
 
+        #region Event Monitoring
         private static void AttachEvents()
         {
             if (_eventsAttached) return;
@@ -252,7 +271,9 @@ namespace Aimmy2.Other
                 ApplyToUserControl(userControl, true);
             }
         }
+        #endregion
 
+        #region Helper Methods
         private static void CheckAllUserControls()
         {
             foreach (Window window in Application.Current.Windows)
@@ -292,7 +313,9 @@ namespace Aimmy2.Other
             CheckAllUserControls();
             ProtectAllProcessWindows();
         }
+        #endregion
 
+        #region Public API
         public static void ApplyStreamGuardToAllWindows(bool enable)
         {
             _isEnabled = enable;
@@ -308,10 +331,47 @@ namespace Aimmy2.Other
             }
             else
             {
+                // Unprotect all popup windows when disabling
                 ProtectAllProcessWindows();
                 DetachEvents();
                 _protectedWindows.Clear();
             }
         }
+
+        public static void ForceProtectAllContent()
+        {
+            if (!_isEnabled) return;
+
+            foreach (Window window in Application.Current.Windows)
+            {
+                ApplyToWindow(window, true);
+                CheckUserControlsInWindow(window);
+            }
+
+            ProtectAllProcessWindows();
+        }
+
+        public static void ProtectComboBoxPopups()
+        {
+            if (!_isEnabled) return;
+            ProtectAllProcessWindows();
+        }
+
+        public static void ProtectWindow(Window window)
+        {
+            if (_isEnabled)
+            {
+                ApplyToWindow(window, true);
+            }
+        }
+
+        public static void ProtectUserControl(UserControl userControl)
+        {
+            if (_isEnabled)
+            {
+                ApplyToUserControl(userControl, true);
+            }
+        }
+        #endregion
     }
 }

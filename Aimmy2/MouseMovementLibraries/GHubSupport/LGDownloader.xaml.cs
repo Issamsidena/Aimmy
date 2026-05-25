@@ -1,5 +1,7 @@
 ﻿using Aimmy2.Class;
+using Aimmy2.Theme;
 using Class;
+using Other;
 using System.Diagnostics;
 using System.IO;
 using System.Net.Http;
@@ -23,6 +25,27 @@ namespace Visuality
         public LGDownloader()
         {
             InitializeComponent();
+
+            // Initialize theme colors
+            UpdateThemeColors();
+
+            // Subscribe to theme changes
+            ThemeManager.RegisterElement(this);
+            ThemeManager.ThemeChanged += OnThemeChanged;
+        }
+
+        private void OnThemeChanged(object sender, System.Windows.Media.Color newColor)
+        {
+            Dispatcher.Invoke(() =>
+            {
+                UpdateThemeColors();
+            });
+        }
+
+        private void UpdateThemeColors()
+        {
+            // Update gradient colors
+            ThemeGradientStop.Color = ThemeManager.ThemeColorDark;
         }
 
         #region Window Controls
@@ -80,7 +103,7 @@ namespace Visuality
         {
             if (sender is Button clickedButton)
             {
-                new NoticeBar("Attempting to download LG Hub.", 4000).Show();
+                LogManager.Log(LogManager.LogLevel.Info, "Attempting to download LG Hub.", true);
 
                 using HttpClient httpClient = new();
 
@@ -90,13 +113,12 @@ namespace Visuality
                     var content = await response.Content.ReadAsByteArrayAsync();
                     await File.WriteAllBytesAsync(FilePath, content);
                 }
-
-                new NoticeBar("LG Hub downloaded, attempting to verify legitimacy of the file.", 4000).Show();
+                LogManager.Log(LogManager.LogLevel.Info, "LG Hub has downloaded, attempting to verify legitimacy of the file.", true);
 
                 if (CheckFileValidity())
                 {
-                    new NoticeBar("File is verified, please look for UAC prompt and install LG Hub.", 5000).Show();
-                    new NoticeBar("When LG Hub is installed, please make sure \"Automatic Updates\" is disabled for long term usage.", 20000).Show();
+                    LogManager.Log(LogManager.LogLevel.Info, "File is verified, attempting to launch LG Hub installer.", true);
+                    LogManager.Log(LogManager.LogLevel.Warning, "When LG Hub is installed, please make sure \"Automatic Updates\" is disabled for long term usage.", true, 20000);
                     Process.Start(new ProcessStartInfo
                     {
                         WindowStyle = ProcessWindowStyle.Hidden,
@@ -108,9 +130,17 @@ namespace Visuality
                 }
                 else
                 {
-                    new NoticeBar("The file is improper, please try a different host.", 5000).Show();
+                    LogManager.Log(LogManager.LogLevel.Error, "File is improper, please try a different host.", true);
                 }
             }
+        }
+
+        protected override void OnClosed(EventArgs e)
+        {
+            // Unregister from theme manager
+            ThemeManager.ThemeChanged -= OnThemeChanged;
+            ThemeManager.UnregisterElement(this);
+            base.OnClosed(e);
         }
     }
 }

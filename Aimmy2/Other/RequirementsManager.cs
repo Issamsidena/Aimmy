@@ -32,7 +32,7 @@ namespace Other
             object? value = Registry.GetValue(keyPath, valueName, null);
             if (value != null && Convert.ToInt32(value) == 1)
             {
-                new NoticeBar("You have Memory Integrity enabled, please disable it to use Logitech Driver", 7000).Show();
+                LogManager.Log(LogManager.LogLevel.Warning, "Memory Integrity is enabled, please disable it to use Logitech Driver.", true, 7000);
                 return false;
             }
             else return true;
@@ -52,7 +52,7 @@ namespace Other
                 string ghubfilepath = process.MainModule.FileName;
                 if (ghubfilepath == null)
                 {
-                    new NoticeBar($"An error occurred. Run as admin and try again.", 6000).Show();
+                    LogManager.Log(LogManager.LogLevel.Error, "An error occurred. Run as admin and try again.", true);
                     return false;
                 }
 
@@ -68,7 +68,7 @@ namespace Other
             }
             catch (AccessViolationException ex)
             {
-                new NoticeBar($"An error occured: {ex.Message}\nRun as admin and try again.", 6000).Show();
+                LogManager.Log(LogManager.LogLevel.Error, $"An error occured: {ex.Message}\nRun as admin and try again.", true);
                 return false;
             }
         }

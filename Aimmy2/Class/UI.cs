@@ -1,4 +1,4 @@
-using Aimmy2.UILibrary;
+﻿using Aimmy2.UILibrary;
 using System.Windows.Controls;
 using UILibrary;
 
@@ -13,10 +13,12 @@ namespace Class
 
         public AKeyChanger? C_Keybind { get; set; }
         public AToggle? T_ConstantAITracking { get; set; }
+        public AToggle? T_StickyAim { get; set; }
+        public AToggle? T_SnapLock { get; set; }
+        public ASlider? S_ApproachSpeed { get; set; }
+        public ASlider? S_ApproachThreshold { get; set; }
         public AToggle? T_Predictions { get; set; }
         public AToggle? T_EMASmoothing { get; set; }
-        public AToggle? T_StickyAim { get; set; }
-        public ASlider? S_StickyAimThreshold { get; set; }
         public AKeyChanger? C_EmergencyKeybind { get; set; }
         public AToggle? T_EnableModelSwitchKeybind { get; set; }
         public AKeyChanger? C_ModelSwitchKeybind { get; set; }
@@ -24,70 +26,71 @@ namespace Class
         //Aim Config
         public ATitle? AT_AimConfig { get; set; }
 
+        // Predictions
+        public ATitle? AT_Predictions { get; set; }
+
         public ADropdown? D_PredictionMethod { get; set; }
         public ADropdown? D_MovementPath { get; set; }
-        public ASlider? S_KalmanLeadTime { get; set; }
-        public ASlider? S_WiseTheFoxLeadTime { get; set; }
-        public ASlider? S_ShalloeLeadMultiplier { get; set; }
-
         public ADropdown? D_DetectionAreaType { get; set; }
         public ComboBoxItem? DDI_ClosestToCenterScreen { get; set; }
         public ADropdown? D_AimingBoundariesAlignment { get; set; }
-        public ADropdown? D_TargetPriority { get; set; }
         public ADropdown? D_TargetClass { get; set; }
+        public ADropdown? D_TargetPriority { get; set; }
         public ASlider? S_MouseSensitivity { get; set; }
         public ASlider? S_MouseJitter { get; set; }
+        public ASlider? S_StickyAimThreshold { get; set; }
         public ASlider? S_YOffset { get; set; }
         public ASlider? S_YOffsetPercent { get; set; }
         public ASlider? S_XOffset { get; set; }
         public ASlider? S_XOffsetPercent { get; set; }
         public ASlider? S_EMASmoothing { get; set; }
+        public ASlider? S_PredictionBlend { get; set; }
+        public ASlider? S_KalmanLeadTime { get; set; }
+        public ASlider? S_WiseTheFoxLeadTime { get; set; }
+        public ASlider? S_ShalloeLeadMultiplier { get; set; }
 
         // Triggerbot
         public ATitle? AT_TriggerBot { get; set; }
 
         public AToggle? T_AutoTrigger { get; set; }
         public AToggle? T_ConstantAIShooting { get; set; }
-        public AToggle? T_CursorCheck { get; set; }
         public AToggle? T_SprayMode { get; set; }
+        //public AToggle? T_OnlyWhenHeld { get; set; }
+        public AToggle? T_CursorCheck { get; set; }
         public AKeyChanger? C_AutoTriggerKeybind { get; set; }
 
         public ASlider? S_AutoTriggerDelay { get; set; }
 
         // Anti Recoil
         public ATitle? AT_AntiRecoil { get; set; }
-
         public AToggle? T_AntiRecoil { get; set; }
-
+        public AToggle? T_AdaptiveRecoil { get; set; }
         public AKeyChanger? C_AntiRecoilKeybind { get; set; }
         public AKeyChanger? C_ToggleAntiRecoilKeybind { get; set; }
         public ASlider? S_HoldTime { get; set; }
-        public APButton? B_RecordFireRate { get; set; }
         public ASlider? S_FireRate { get; set; }
         public ASlider? S_YAntiRecoilAdjustment { get; set; }
         public ASlider? S_XAntiRecoilAdjustment { get; set; }
-        public AToggle? T_AdaptiveRecoil { get; set; }
-        public StackPanel? P_AdaptiveRecoilOptions { get; set; }
         public ASlider? S_DriftCompensationX { get; set; }
         public ASlider? S_DriftCompensationXSpeed { get; set; }
         public ASlider? S_DriftCompensationY { get; set; }
         public ASlider? S_DriftCompensationYSpeed { get; set; }
         public ASlider? S_SprayFadeX { get; set; }
-        public ASlider? S_SprayFadeY { get; set; }
         public ASlider? S_SprayFadeXSpeed { get; set; }
+        public ASlider? S_SprayFadeY { get; set; }
         public ASlider? S_SprayFadeYSpeed { get; set; }
+        public APButton? B_RecordFireRate { get; set; }
+        public StackPanel? P_AdaptiveRecoilOptions { get; set; }
 
         // Anti Recoil Config
         public ATitle? AT_AntiRecoilConfig { get; set; }
-
         public AToggle? T_EnableGunSwitchingKeybind { get; set; }
-
         public APButton? B_SaveRecoilConfig { get; set; }
         public AKeyChanger? C_Gun1Key { get; set; }
-        public AFileLocator? AFL_Gun1Config { get; set; }
         public AKeyChanger? C_Gun2Key { get; set; }
-        public AFileLocator? AFL_Gun2Config { get; set; }
         public AKeyChanger? C_Gun3Key { get; set; }
+        public AFileLocator? AFL_Gun1Config { get; set; }
+        public AFileLocator? AFL_Gun2Config { get; set; }
         public AFileLocator? AFL_Gun3Config { get; set; }
         public APButton? B_LoadGun1Config { get; set; }
         public APButton? B_LoadGun2Config { get; set; }
@@ -95,13 +98,13 @@ namespace Class
 
         // FOV
         public ATitle? AT_FOV { get; set; }
-
         public AToggle? T_FOV { get; set; }
-
         public AToggle? T_DynamicFOV { get; set; }
         public AToggle? T_ThirdPersonSupport { get; set; }
         public AKeyChanger? C_DynamicFOV { get; set; }
-        public ADropdown? D_FOVSTYLE { get; set; }
+        //--
+        public ADropdown D_FOVSTYLE { get; set; }
+        //--
         public AColorChanger? CC_FOVColor { get; set; }
         public ASlider? S_FOVSize { get; set; }
         public ASlider? S_DynamicFOVSize { get; set; }
@@ -120,25 +123,30 @@ namespace Class
         public ASlider? S_DPBorderThickness { get; set; }
         public ASlider? S_DPOpacity { get; set; }
 
+        // Model Settings
+        public ATitle? AT_ModelSettings { get; set; }
+
         // Settings UI
         public ATitle? AT_SettingsMenu { get; set; }
         public AToggle? T_CollectDataWhilePlaying { get; set; }
         public AToggle? T_AutoLabelData { get; set; }
         public ADropdown? D_MouseMovementMethod { get; set; }
         public ADropdown? D_ScreenCaptureMethod { get; set; }
+        public ADropdown? D_ImageSize { get; set; }
         public ComboBoxItem? DDI_LGHUB { get; set; }
         public ComboBoxItem? DDI_RazerSynapse { get; set; }
         public ComboBoxItem? DDI_ddxoft { get; set; }
+        public AToggle? T_DebugMode { get; set; }
         public ASlider? S_AIMinimumConfidence { get; set; }
-        public AToggle? T_StreamGuard { get; set; }
         public AToggle? T_MouseBackgroundEffect { get; set; }
         public AToggle? T_UITopMost { get; set; }
-        public AToggle? T_DebugMode { get; set; }
         public APButton? B_SaveConfig { get; set; }
         public APButton? B_Debug { get; set; }
+        //--
+        public AToggle? T_StreamGuard { get; set; }
+        //--
 
-        // X/Y Percentage Adjustment Enabler
-        public ATitle? AT_XYPercentageAdjustmentEnabler { get; set; }
+        // X/Y Percentage Adjustment (in Aim Config)
         public AToggle? T_XAxisPercentageAdjustment { get; set; }
         public AToggle? T_YAxisPercentageAdjustment { get; set; }
 
@@ -155,7 +163,5 @@ namespace Class
 
         // Stores
         public APButton? B_RepoManager { get; set; }
-        public ATitle AT_Predictions { get; internal set; }
-        public ATitle AT_ModelSettings { get; internal set; }
     }
 }

@@ -43,18 +43,12 @@
                 <Border Height="50"
                         VerticalAlignment="Bottom"
                         CornerRadius="0">
-                    <Border.Background>
-                        <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
-                            <GradientStop Color="#FF1A1A1A" Offset="0"/>
-                            <GradientStop Color="#FF0F0F0F" Offset="1"/>
-                        </LinearGradientBrush>
-                    </Border.Background>
 
                     <Label x:Name="CurrentDisplayInfo"
                            FontFamily="{StaticResource Atkinson Hyperlegible}"
                            Content="Primary Display Selected"
                            Foreground="#BBFFFFFF"
-                           FontSize="11"
+                           FontSize="14"
                            HorizontalContentAlignment="Center"
                            VerticalContentAlignment="Center"/>
                 </Border>

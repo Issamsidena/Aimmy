@@ -1,4 +1,4 @@
-using Other;
+﻿using Other;
 
 namespace Aimmy2.UILibrary
 {
@@ -7,12 +7,11 @@ namespace Aimmy2.UILibrary
     /// </summary>
     public partial class AKeyChanger : System.Windows.Controls.UserControl
     {
-        public AKeyChanger(string Text, string Keybind, string? tooltip)
+        public AKeyChanger(string Text, string Keybind, string? tooltip = null)
         {
             InitializeComponent();
             KeyChangerTitle.Content = Text;
 
-            KeyNotifier.Content = KeybindNameManager.ConvertToRegularKey(Keybind);
             if (!string.IsNullOrEmpty(tooltip))
             {
                 var tt = new System.Windows.Controls.ToolTip { Content = tooltip };
@@ -20,6 +19,8 @@ namespace Aimmy2.UILibrary
                     tt.Style = style;
                 ToolTip = tt;
             }
+
+            KeyNotifier.Content = KeybindNameManager.ConvertToRegularKey(Keybind);
         }
     }
 }

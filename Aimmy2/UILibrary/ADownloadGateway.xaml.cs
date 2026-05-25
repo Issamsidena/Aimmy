@@ -1,9 +1,8 @@
-﻿using System.Diagnostics;
+﻿using Other;
 using System.IO;
 using System.Net.Http;
 using System.Windows;
 using System.Windows.Controls;
-using Visuality;
 
 namespace Aimmy2.UILibrary
 {
@@ -26,12 +25,13 @@ namespace Aimmy2.UILibrary
                 DownloadButton.Content = "\xE895";
                 SetupHttpClientHeaders();
 
-                var downloadUri = new Uri($"https://github.com/Babyhamsta/Aimmy/raw/Aimmy-V2/{Path}/{Name}");
+                var encodedName = Uri.EscapeDataString(Name);
+                var downloadUri = new Uri($"https://github.com/BabyHamsta/Aimmy/raw/Aimmy-V2/{Path}/{encodedName}");
                 var downloadResult = await DownloadFileAsync(downloadUri, Path, Name);
 
                 if (downloadResult)
                 {
-                    new NoticeBar("The download has been completed.", 4000).Show();
+                    LogManager.Log(LogManager.LogLevel.Info, $"Downloaded {Name} to bin/{Path}/{Name}", true);
                     RemoveFromParent();
                 }
                 else
@@ -59,7 +59,7 @@ namespace Aimmy2.UILibrary
 
             if (!response.IsSuccessStatusCode)
             {
-                new NoticeBar($"Download Failed, {response.StatusCode}, {response.ReasonPhrase}", 4000).Show();
+                LogManager.Log(LogManager.LogLevel.Error, $"Failed to download {name} from {uri}. Status: {response.StatusCode} - {response.ReasonPhrase}", true);
                 return false;
             }
 

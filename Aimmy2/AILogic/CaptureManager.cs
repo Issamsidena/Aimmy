@@ -1,15 +1,13 @@
 ﻿using Aimmy2.Class;
+using Other;
 using SharpGen.Runtime;
-using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Imaging;
-using System.Windows;
-using System.Windows.Threading;
-using Visuality;
 using Vortice.Direct3D;
 using Vortice.Direct3D11;
 using Vortice.DXGI;
 using Vortice.Mathematics;
+using LogLevel = Other.LogManager.LogLevel;
 
 namespace AILogic
 {
@@ -20,8 +18,9 @@ namespace AILogic
         private bool _directXFailedPermanently = false; // Track if DirectX failed with unsupported error
         private bool _notificationShown = false; // Prevent spam notifications
 
-        private const int IMAGE_SIZE = 640;
+        // Capturing
         public Bitmap? screenCaptureBitmap { get; private set; }
+        public Bitmap? directXBitmap { get; private set; }
         private ID3D11Device? _dxDevice;
         private IDXGIOutputDuplication? _deskDuplication;
         private ID3D11Texture2D? _stagingTex;
@@ -32,6 +31,7 @@ namespace AILogic
         private DateTime _lastFrameTime = DateTime.MinValue;
         private readonly TimeSpan _frameCacheTimeout = TimeSpan.FromMilliseconds(15); // Adjust as needed
 
+
         // Display change handling
         public readonly object _displayLock = new();
         public bool _displayChangesPending { get; set; } = false;
@@ -39,30 +39,50 @@ namespace AILogic
         // Performance tracking
         private int _consecutiveFailures = 0;
         private const int MAX_CONSECUTIVE_FAILURES = 5;
+
+        // stride matching
+        private bool _lastStrideMatch = true;
+        private int _lastSrcStride = 0;
+        private int _lastDstStride = 0;
+
         #endregion
-
-        #region Helper Methods
-        private void ShowNoticeOnUIThread(string message, int duration)
+        #region Handlers
+        public CaptureManager()
         {
-            if (_notificationShown) return; // Prevent spam
-            _notificationShown = true;
+            // Subscribe to display changes FIRST
+            DisplayManager.DisplayChanged += OnDisplayChanged;
+        }
 
-            // Check if we're already on the UI thread
-            if (Application.Current?.Dispatcher?.CheckAccess() == true)
+        private void OnDisplayChanged(object? sender, DisplayChangedEventArgs e)
+        {
+            lock (_displayLock)
             {
-                new NoticeBar(message, duration).Show();
+                _displayChangesPending = true;
+                _consecutiveFailures = 0;
+                DisposeDxgiResources();
             }
-            else
+            LogManager.Log(LogLevel.Info, "Display change detected. DirectX resources will be reinitialized.");
+        }
+
+        public void HandlePendingDisplayChanges()
+        {
+            lock (_displayLock)
             {
-                // Dispatch to UI thread
-                Application.Current?.Dispatcher?.BeginInvoke(new Action(() =>
+                if (!_displayChangesPending) return;
+
+                try
                 {
-                    new NoticeBar(message, duration).Show();
-                }), DispatcherPriority.Normal);
+                    InitializeDxgiDuplication();
+                    _displayChangesPending = false;
+                }
+                catch (Exception ex)
+                {
+
+                }
             }
         }
-        #endregion
 
+        #endregion
         #region DirectX
         public void InitializeDxgiDuplication()
         {
@@ -70,9 +90,9 @@ namespace AILogic
             try
             {
                 var currentDisplay = DisplayManager.CurrentDisplay;
-
                 if (currentDisplay == null)
                 {
+                    LogManager.Log(LogLevel.Error, "No current display available. DisplayManager may not be initialized.");
                     throw new InvalidOperationException("No current display available. DisplayManager may not be initialized.");
                 }
 
@@ -85,7 +105,7 @@ namespace AILogic
                     factory.EnumAdapters1(adapterIndex, out var adapter).Success;
                     adapterIndex++)
                 {
-                    Debug.WriteLine($"\nAdapter {adapterIndex}:");
+                    LogManager.Log(LogLevel.Info, $"Checking Adapter {adapterIndex}: {adapter.Description.Description.TrimEnd('\0')}");
 
                     for (uint outputIndex = 0;
                         adapter.EnumOutputs(outputIndex, out var output).Success;
@@ -100,13 +120,13 @@ namespace AILogic
                                 outputDesc.DesktopCoordinates.Top,
                                 outputDesc.DesktopCoordinates.Right - outputDesc.DesktopCoordinates.Left,
                                 outputDesc.DesktopCoordinates.Bottom - outputDesc.DesktopCoordinates.Top);
+                            LogManager.Log(LogLevel.Info, $"Found Output {outputIndex}: DeviceName = '{outputDesc.DeviceName.TrimEnd('\0')}', Bounds = {outputBounds}");
 
                             // Try different matching strategies
                             bool nameMatch = currentDisplay?.DeviceName != null && outputDesc.DeviceName.TrimEnd('\0') == currentDisplay.DeviceName.TrimEnd('\0');
                             bool boundsMatch = currentDisplay?.Bounds != null && outputBounds.Equals(currentDisplay.Bounds);
 
-                            // Try matching by bounds only as a fallback
-                            if (boundsMatch)
+                            if (nameMatch || boundsMatch)
                             {
                                 targetOutput1 = output1;
                                 targetAdapter = adapter;
@@ -117,15 +137,12 @@ namespace AILogic
                         }
                     }
 
-                    if (foundTarget)
-                        break;
-                    adapter.Dispose();
+                    if (foundTarget) break;
                 }
 
                 // Fallback to specific display index if not found
-                if (targetOutput1 == null || targetAdapter == null)
+                if (!foundTarget)
                 {
-                    // Try to find by index
                     int targetIndex = currentDisplay?.Index ?? 0;
                     int currentIndex = 0;
 
@@ -139,7 +156,7 @@ namespace AILogic
                         {
                             if (currentIndex == targetIndex)
                             {
-                                Debug.WriteLine($"Found display at index {targetIndex}");
+                                LogManager.Log(LogLevel.Warning, $"Could not match display by name or bounds. Found a fallback index, {targetIndex}.");
                                 targetOutput1 = output.QueryInterface<IDXGIOutput1>();
                                 targetAdapter = adapter;
                                 foundTarget = true;
@@ -157,61 +174,93 @@ namespace AILogic
 
                 if (targetAdapter == null || targetOutput1 == null)
                 {
+                    LogManager.Log(LogLevel.Error, "No suitable display output found for DirectX capture.", true, 6000);
                     throw new Exception("No suitable display output found");
                 }
+
+                FeatureLevel[] featureLevels = {
+                    FeatureLevel.Level_12_2, // 50 series support
+                    FeatureLevel.Level_12_1,
+                    FeatureLevel.Level_12_0,
+                    FeatureLevel.Level_11_1,
+                    FeatureLevel.Level_11_0,
+                    FeatureLevel.Level_10_1,
+                    FeatureLevel.Level_10_0,
+                    FeatureLevel.Level_9_3,
+                    FeatureLevel.Level_9_2,
+                    FeatureLevel.Level_9_1
+                };
 
                 // Create D3D11 device
                 var result = D3D11.D3D11CreateDevice(
                     targetAdapter,
                     DriverType.Unknown,
                     DeviceCreationFlags.None,
-                    null,
+                    featureLevels,
                     out _dxDevice);
 
                 if (result.Failure || _dxDevice == null)
                 {
-                    throw new Exception($"Failed to create D3D11 device: {result}");
+                    result = D3D11.D3D11CreateDevice(
+                      targetAdapter,
+                      DriverType.Unknown,
+                      DeviceCreationFlags.None,
+                      null,
+                      out _dxDevice);
+
+                    if (result.Failure || _dxDevice == null)
+                    {
+                        LogManager.Log(LogLevel.Error, $"Failed to create D3D11 device: {result}", true, 6000);
+                        throw new Exception($"Failed to create D3D11 device: {result}");
+                    }
                 }
 
                 // Create desktop duplication
                 _deskDuplication = targetOutput1.DuplicateOutput(_dxDevice);
+                _consecutiveFailures = 0; //reset on success
 
-                // Reset failure counter on successful init
-                _consecutiveFailures = 0;
-
-                // Cleanup
-                targetAdapter.Dispose();
-                targetOutput1.Dispose();
+                LogManager.Log(LogLevel.Info, "DirectX Desktop Duplication initialized successfully.");
             }
-            catch (SharpGenException ex) when (ex.ResultCode == Vortice.DXGI.ResultCode.Unsupported ||
-                                                ex.HResult == unchecked((int)0x887A0004))
+            catch (SharpGenException ex) when (ex.ResultCode == Vortice.DXGI.ResultCode.Unsupported || ex.HResult == unchecked((int)0x887A0004))
             {
-                // DirectX Desktop Duplication not supported
-                Debug.WriteLine($"DirectX Desktop Duplication not supported: {ex.Message}");
+                LogManager.Log(LogLevel.Error, $"DirectX Desktop Duplication not supported on this system: {ex.Message}", true, 6000);
                 _directXFailedPermanently = true;
                 DisposeDxgiResources();
 
-                // Force switch to GDI+
                 Dictionary.dropdownState["Screen Capture Method"] = "GDI+";
                 _currentCaptureMethod = "GDI+";
 
-                ShowNoticeOnUIThread("DirectX Desktop Duplication not supported on this system. Switched to GDI+ capture.", 6000);
+                LogManager.Log(LogLevel.Error, "DirectX Desktop Duplication not supported on this system. Switched to GDI+ capture.", true, 6000);
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"InitializeDxgiDuplication failed: {ex.Message}");
+                LogManager.Log(LogLevel.Error, $"Failed to initialize DirectX Desktop Duplication: {ex.Message}", true, 6000);
                 DisposeDxgiResources();
                 throw;
             }
         }
-
         private Bitmap? DirectX(Rectangle detectionBox)
         {
             int w = detectionBox.Width;
             int h = detectionBox.Height;
+            bool frameAcquired = false;
+            IDXGIResource? desktopResource = null;
+
+
+            Bitmap? resultBitmap = null;
 
             try
             {
+
+                lock (_displayLock)
+                {
+                    if (_displayChangesPending)
+                    {
+                        InitializeDxgiDuplication();
+                        _displayChangesPending = false;
+                    }
+                }
+
                 // Check if we need to reinitialize
                 if (_dxDevice == null || _dxDevice.ImmediateContext == null || _deskDuplication == null)
                 {
@@ -223,71 +272,67 @@ namespace AILogic
                     }
                 }
 
-                // Check if we need new staging texture - always match requested size
-                bool requiresNewResources = _stagingTex == null ||
-                    _stagingTex.Description.Width != detectionBox.Width ||
-                    _stagingTex.Description.Height != detectionBox.Height;
+                if (directXBitmap == null || directXBitmap.Width != w || directXBitmap.Height != h)
+                {
+                    directXBitmap?.Dispose();
+                    directXBitmap = new Bitmap(w, h, PixelFormat.Format32bppArgb);
+                }
 
-                if (requiresNewResources)
+                // Check if we need new staging texture - always match requested size
+                if (_stagingTex == null ||
+                    _stagingTex.Description.Width != w ||
+                    _stagingTex.Description.Height != h)
                 {
                     _stagingTex?.Dispose();
-
-                    var desc = new Texture2DDescription
+                    _stagingTex = _dxDevice.CreateTexture2D(new Texture2DDescription
                     {
                         Width = (uint)w,
                         Height = (uint)h,
                         MipLevels = 1,
                         ArraySize = 1,
                         Format = Format.B8G8R8A8_UNorm,
-                        SampleDescription = new SampleDescription(1, 0),
+                        SampleDescription = new(1, 0),
                         Usage = ResourceUsage.Staging,
                         CPUAccessFlags = CpuAccessFlags.Read,
                         BindFlags = BindFlags.None
-                    };
-
-                    _stagingTex = _dxDevice.CreateTexture2D(desc);
+                    });
                 }
 
-                bool frameAcquired = false;
-                IDXGIResource? desktopResource = null;
+                int timeout = _consecutiveFailures > 0 ? 5 : 1;
+                var result = _deskDuplication!.AcquireNextFrame((uint)timeout, out var frameInfo, out desktopResource);
 
-                try
+                if (result == Vortice.DXGI.ResultCode.WaitTimeout)
                 {
-                    // Try to acquire next frame with a reasonable timeout
-                    var result = _deskDuplication!.AcquireNextFrame(0, out var frameInfo, out desktopResource);
+                    // No new frame available - this is normal
+                    _consecutiveFailures = 0; // Reset failure counter
+                    return GetCachedFrame(detectionBox);
+                }
+                else if (result == Vortice.DXGI.ResultCode.DeviceRemoved || result == Vortice.DXGI.ResultCode.AccessLost)
+                { // Device lost - need to reinitialize
+                    _consecutiveFailures++;
 
-                    if (result == Vortice.DXGI.ResultCode.WaitTimeout)
-                    {
-                        // No new frame available - this is normal
-                        _consecutiveFailures = 0; // Reset failure counter
-                        return GetCachedFrame(detectionBox);
-                    }
-                    else if (result == Vortice.DXGI.ResultCode.DeviceRemoved || result == Vortice.DXGI.ResultCode.AccessLost)
-                    {
-                        // Device lost - need to reinitialize
-                        _consecutiveFailures++;
-                        if (_consecutiveFailures >= MAX_CONSECUTIVE_FAILURES)
-                        {
-                            lock (_displayLock) { _displayChangesPending = true; }
-                        }
-                        return GetCachedFrame(detectionBox);
-                    }
-                    else if (result != Result.Ok)
-                    {
-                        // Other error
-                        _consecutiveFailures++;
-                        return GetCachedFrame(detectionBox);
-                    }
+                    if (_consecutiveFailures >= MAX_CONSECUTIVE_FAILURES)
+                        lock (_displayLock) { _displayChangesPending = true; }
 
-                    frameAcquired = true;
-                    _consecutiveFailures = 0; // Reset on successful acquisition
+                    return GetCachedFrame(detectionBox);
+                }
+                else if (result != Result.Ok)
+                {
+                    // Other error
+                    _consecutiveFailures++;
+                    return GetCachedFrame(detectionBox);
+                }
 
-                    using var screenTexture = desktopResource.QueryInterface<ID3D11Texture2D>();
+                frameAcquired = true;
+                _consecutiveFailures = 0; // Reset on successful acquisition
 
+                using (var screenTexture = desktopResource.QueryInterface<ID3D11Texture2D>())
+                {
+                    #region Display Bounds
                     var displayBounds = new Rectangle(DisplayManager.ScreenLeft,
-                                                      DisplayManager.ScreenTop,
-                                                      DisplayManager.ScreenWidth,
-                                                      DisplayManager.ScreenHeight);
+                                                  DisplayManager.ScreenTop,
+                                                  DisplayManager.ScreenWidth,
+                                                  DisplayManager.ScreenHeight);
 
                     // IMPORTANT: Convert absolute screen coordinates to display-relative coordinates
                     // The duplicated output starts at (0,0), not at its screen position
@@ -302,67 +347,54 @@ namespace AILogic
                     int srcRight = Math.Min(relativeDetectionRight, DisplayManager.ScreenWidth);
                     int srcBottom = Math.Min(relativeDetectionBottom, DisplayManager.ScreenHeight);
 
-                    // Calculate where to place this in the destination bitmap
-                    int dstX = srcLeft - relativeDetectionLeft;
-                    int dstY = srcTop - relativeDetectionTop;
-
                     // Only copy if there's a visible region
                     if (srcRight > srcLeft && srcBottom > srcTop)
                     {
-                        var box = new Box
-                        {
-                            Left = srcLeft,
-                            Top = srcTop,
-                            Front = 0,
-                            Right = srcRight,
-                            Bottom = srcBottom,
-                            Back = 1
-                        };
+                        var box = new Box(srcLeft, srcTop, 0, srcRight, srcBottom, 1);
 
-                        // Copy to the correct position in the staging texture
-                        // Cast to uint as required by the API
-                        _dxDevice.ImmediateContext!.CopySubresourceRegion(_stagingTex, 0, (uint)dstX, (uint)dstY, 0, screenTexture, 0, box);
+                        _dxDevice.ImmediateContext.CopySubresourceRegion(
+                               _stagingTex, 0,
+                               (uint)(srcLeft - relativeDetectionLeft),
+                               (uint)(srcTop - relativeDetectionTop),
+                               0,
+                               screenTexture, 0, box);
                     }
-
-                    var map = _dxDevice.ImmediateContext.Map(_stagingTex, 0, MapMode.Read, Vortice.Direct3D11.MapFlags.None);
-                    var bitmap = new Bitmap(w, h, PixelFormat.Format32bppArgb);
-
-                    // Clear bitmap to black to match GDI behavior for out-of-bounds areas
-                    // Use fully qualified name to avoid ambiguity
-                    using (var g = Graphics.FromImage(bitmap))
+                    else
                     {
-                        g.Clear(System.Drawing.Color.Black);
+                        LogManager.Log(LogLevel.Warning, "No visible region to copy from DirectX capture.", true, 3000);
+                        return GetCachedFrame(detectionBox);
                     }
 
-                    var boundsRect = new Rectangle(0, 0, detectionBox.Width, detectionBox.Height);
-                    BitmapData? mapDest = null;
+                    #endregion
+
+                    #region Bitmap
+                    var map = _dxDevice.ImmediateContext.Map(_stagingTex, 0, MapMode.Read, Vortice.Direct3D11.MapFlags.None);
+                    var boundsRect = new Rectangle(0, 0, w, h);
+                    BitmapData? mapDest = directXBitmap.LockBits(boundsRect, ImageLockMode.WriteOnly, directXBitmap.PixelFormat);
 
                     try
                     {
-                        mapDest = bitmap.LockBits(boundsRect, ImageLockMode.WriteOnly, bitmap.PixelFormat);
-
                         unsafe
                         {
-                            // Use the minimum of the two strides to avoid buffer overrun
-                            int srcStride = (int)map.RowPitch;
-                            int dstStride = mapDest.Stride;
-                            int copyStride = Math.Min(srcStride, dstStride);
-
                             byte* src = (byte*)map.DataPointer;
                             byte* dst = (byte*)mapDest.Scan0;
+                            int srcStride = (int)map.RowPitch;
+                            int dstStride = mapDest.Stride;
 
+                            int copyBytesPerRow = Math.Min(srcStride, dstStride);
                             for (int y = 0; y < h; y++)
                             {
-                                Buffer.MemoryCopy(src, dst, copyStride, copyStride);
+                                Buffer.MemoryCopy(src, dst, dstStride, copyBytesPerRow);
                                 src += srcStride;
                                 dst += dstStride;
                             }
 
-                            if (Dictionary.toggleState["Third Person Support"])
+                            if (Dictionary.toggleState["Third Person Support"]) // a mask basically
                             {
                                 int width = w / 2;
                                 int height = h / 2;
                                 int startY = h - height;
+
                                 byte* basePtr = (byte*)mapDest.Scan0;
                                 for (int y = startY; y < h; y++)
                                 {
@@ -370,116 +402,80 @@ namespace AILogic
                                     for (int x = 0; x < width; x++)
                                     {
                                         int pixelOffset = x * 4;
-                                        rowPtr[pixelOffset + 0] = 0;
-                                        rowPtr[pixelOffset + 1] = 0;
-                                        rowPtr[pixelOffset + 2] = 0;
-                                        rowPtr[pixelOffset + 3] = 255;
+                                        // Pixel layout: [B, G, R, A]
+                                        rowPtr[pixelOffset + 0] = 0;   // Blue -> 0
+                                        rowPtr[pixelOffset + 1] = 0;   // Green -> 0
+                                        rowPtr[pixelOffset + 2] = 0;   // Red -> 0
+                                        rowPtr[pixelOffset + 3] = 255; // Alpha -> 255 (opaque)
                                     }
                                 }
                             }
                         }
-
-                        // Update cache
-                        UpdateCache(bitmap, detectionBox);
-                        return bitmap;
+                        #endregion
                     }
                     finally
                     {
-                        if (mapDest != null)
-                            bitmap.UnlockBits(mapDest);
-
+                        directXBitmap.UnlockBits(mapDest);
                         _dxDevice.ImmediateContext.Unmap(_stagingTex, 0);
                     }
-                }
-                finally
-                {
-                    if (frameAcquired && _deskDuplication != null)
-                    {
-                        try
-                        {
-                            _deskDuplication.ReleaseFrame();
-                        }
-                        catch { }
-                    }
-                    desktopResource?.Dispose();
+
+
+                    resultBitmap = (Bitmap)directXBitmap.Clone();
+                    UpdateCache(resultBitmap, detectionBox);
+                    return resultBitmap;
                 }
             }
             catch (Exception e)
             {
-                Debug.WriteLine($"DirectX capture error: {e.Message}");
-                _consecutiveFailures++;
+                LogManager.Log(LogLevel.Error, $"DirectX capture error: {e.Message}");
 
-                if (_consecutiveFailures >= MAX_CONSECUTIVE_FAILURES)
-                {
+                if (++_consecutiveFailures >= MAX_CONSECUTIVE_FAILURES)
                     lock (_displayLock) { _displayChangesPending = true; }
-                }
 
                 return GetCachedFrame(detectionBox);
             }
-        }
-
-        private void UpdateCache(Bitmap frame, Rectangle bounds)
-        {
-            // Dispose old cached frame if bounds changed
-            if (_cachedFrame != null && !_cachedFrameBounds.Equals(bounds))
+            finally
             {
-                _cachedFrame.Dispose();
-                _cachedFrame = null;
-            }
-
-            // Clone the frame for cache
-            _cachedFrame?.Dispose();
-            _cachedFrame = (Bitmap)frame.Clone();
-            _cachedFrameBounds = bounds;
-            _lastFrameTime = DateTime.Now;
-        }
-
-        private Bitmap? GetCachedFrame(Rectangle detectionBox)
-        {
-            // Check if we have a valid cached frame
-            if (_cachedFrame == null || !_cachedFrameBounds.Equals(detectionBox))
-                return null;
-
-            // Check if cache is too old
-            if (DateTime.Now - _lastFrameTime > _frameCacheTimeout)
-                return null;
-
-            // Return a clone of the cached frame
-            return (Bitmap)_cachedFrame.Clone();
-        }
-
-        public void DisposeDxgiResources()
-        {
-            try
-            {
-                // Try to release any pending frame
-                if (_deskDuplication != null)
+                desktopResource?.Dispose();
+                try
                 {
-                    try
+                    if (frameAcquired && _deskDuplication != null)
                     {
                         _deskDuplication.ReleaseFrame();
                     }
-                    catch { }
                 }
+                catch { }
 
-                _deskDuplication?.Dispose();
-                _stagingTex?.Dispose();
-                _dxDevice?.Dispose();
-                _cachedFrame?.Dispose();
-
-                _deskDuplication = null;
-                _stagingTex = null;
-                _dxDevice = null;
-                _cachedFrame = null;
-
-                // Small delay to ensure resources are fully released
-                System.Threading.Thread.Sleep(50);
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"Error disposing DXGI resources: {ex.Message}");
             }
         }
+        #region Frame Caching
+
+
+        private void UpdateCache(Bitmap frame, Rectangle bounds)
+        {
+            if (_cachedFrame == null ||
+                !_cachedFrameBounds.Equals(bounds) ||
+                DateTime.Now - _lastFrameTime > _frameCacheTimeout)
+            {
+                _cachedFrame?.Dispose();
+                _cachedFrame = (Bitmap)frame.Clone();
+                _cachedFrameBounds = bounds;
+            }
+            _lastFrameTime = DateTime.Now;
+        }
+
+
+        private Bitmap? GetCachedFrame(Rectangle detectionBox)
+        {
+            if (_cachedFrame != null &&
+                _cachedFrameBounds.Equals(detectionBox) &&
+                DateTime.Now - _lastFrameTime <= _frameCacheTimeout)
+            {
+                return (Bitmap)_cachedFrame.Clone();
+            }
+            return null;
+        }
+        #endregion
         #endregion
 
         #region GDI
@@ -500,22 +496,33 @@ namespace AILogic
             {
                 using (var g = Graphics.FromImage(screenCaptureBitmap))
                 {
-                    g.CopyFromScreen(detectionBox.Left, detectionBox.Top, 0, 0, detectionBox.Size);
+                    g.CopyFromScreen(
+                        detectionBox.Left,
+                        detectionBox.Top,
+                        0, 0,
+                        detectionBox.Size,
+                        CopyPixelOperation.SourceCopy
+                    );
 
                     if (Dictionary.toggleState["Third Person Support"])
                     {
                         int width = screenCaptureBitmap.Width / 2;
                         int height = screenCaptureBitmap.Height / 2;
                         int startY = screenCaptureBitmap.Height - height;
+
                         using var brush = new SolidBrush(System.Drawing.Color.Black);
                         g.FillRectangle(brush, 0, startY, width, height);
                     }
                 }
+
+                // Clone the bitmap to avoid race conditions with Sticky Aim / SaveFrame
+                // The source bitmap is reused, so returning it directly can cause crashes
+                // if the caller is still using it when the next frame capture starts
                 return (Bitmap)screenCaptureBitmap.Clone();
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"Failed to capture screen: {ex.Message}");
+                LogManager.Log(LogLevel.Error, $"GDI+ screen capture failed: {ex.Message}");
                 throw;
             }
         }
@@ -539,6 +546,10 @@ namespace AILogic
                 // Dispose bitmap when switching methods
                 screenCaptureBitmap?.Dispose();
                 screenCaptureBitmap = null;
+
+                directXBitmap?.Dispose();
+                directXBitmap = null;
+
                 _currentCaptureMethod = selectedMethod;
                 _notificationShown = false; // Reset notification flag on method change
 
@@ -562,5 +573,51 @@ namespace AILogic
                 return GDIScreen(detectionBox);
             }
         }
+
+        #region dispose
+        public void DisposeDxgiResources()
+        {
+            lock (_displayLock)
+            {
+                try
+                {
+
+                    // Try to release any pending frame
+                    if (_deskDuplication != null)
+                    {
+                        try
+                        {
+                            _deskDuplication.ReleaseFrame();
+                        }
+                        catch { }
+                    }
+
+                    _deskDuplication?.Dispose();
+                    _stagingTex?.Dispose();
+                    _dxDevice?.Dispose();
+                    _cachedFrame?.Dispose();
+                    directXBitmap?.Dispose();
+
+                    _deskDuplication = null;
+                    _stagingTex = null;
+                    _dxDevice = null;
+                    _cachedFrame = null;
+
+                    // Small delay to ensure resources are fully released
+                    //System.Threading.Thread.Sleep(50);
+                }
+                catch (Exception ex)
+                {
+                    LogManager.Log(LogLevel.Error, $"Error disposing DXGI resources: {ex.Message}");
+                }
+            }
+        }
+        public void Dispose()
+        {
+            DisplayManager.DisplayChanged -= OnDisplayChanged;
+            DisposeDxgiResources();
+            screenCaptureBitmap?.Dispose();
+        }
+        #endregion
     }
 }

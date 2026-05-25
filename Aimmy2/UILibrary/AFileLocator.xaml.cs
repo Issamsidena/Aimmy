@@ -42,11 +42,11 @@ namespace UILibrary
             }
         }
 
-        /// <summary>Clears the assigned path only (does not delete any file on disk).</summary>
         public void ClearLocation()
         {
             FileLocationTextbox.Text = string.Empty;
-            Dictionary.filelocationState[main_dictionary_path] = string.Empty;
+            if (Dictionary.filelocationState.ContainsKey(main_dictionary_path))
+                Dictionary.filelocationState[main_dictionary_path] = string.Empty;
         }
     }
 }
