@@ -318,7 +318,7 @@ namespace Aimmy2.Controls
         {
             try
             {
-                var version = AboutDesc.Content?.ToString()?.TrimStart('v') ?? "2.7.0";
+                var version = AboutDesc.Content?.ToString()?.TrimStart('v') ?? "2.7.1";
                 Process.Start(new ProcessStartInfo
                 {
                     FileName = $"https://github.com/Babyhamsta/Aimmy/releases/tag/v{version}",

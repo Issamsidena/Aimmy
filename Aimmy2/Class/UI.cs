@@ -46,6 +46,7 @@ namespace Class
         public ASlider? S_EMASmoothing { get; set; }
         public ASlider? S_PredictionBlend { get; set; }
         public ASlider? S_KalmanLeadTime { get; set; }
+        public ASlider? S_KalmanSmoothness { get; set; }
         public ASlider? S_WiseTheFoxLeadTime { get; set; }
         public ASlider? S_ShalloeLeadMultiplier { get; set; }
 

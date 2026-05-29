@@ -41,6 +41,7 @@ namespace Aimmy2.Class
             { "EMA Smoothening", 0.5},
             { "Prediction Blend", 50 },
             { "Kalman Lead Time", 0.10 },
+            { "Kalman Smoothness", 0.5 },
             { "WiseTheFox Lead Time", 0.15 },
             { "Shalloe Lead Multiplier", 3.0 },
             { "Auto Trigger Delay", 0.1 },

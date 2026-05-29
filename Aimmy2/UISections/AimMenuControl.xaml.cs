@@ -433,6 +433,12 @@ namespace Aimmy2.Controls
                     // Start collapsed - visibility will be set by LoadDropdownStates
                     s.Visibility = Visibility.Collapsed;
                 }, tooltip: "How far ahead to predict target position. Higher = more prediction, may overshoot.")
+                .AddSlider("Kalman Smoothness", "Amount", 0.01, 0.01, 0.01, 1.00, s =>
+                {
+                    uiManager.S_KalmanSmoothness = s;
+                    // Start collapsed - visibility will be set by LoadDropdownStates
+                    s.Visibility = Visibility.Collapsed;
+                }, tooltip: "How much to smooth out Kalman predictions")
                 .AddSlider("WiseTheFox Lead Time", "Seconds", 0.01, 0.01, 0.02, 0.30, s =>
                 {
                     uiManager.S_WiseTheFoxLeadTime = s;

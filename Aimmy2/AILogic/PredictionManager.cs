@@ -11,23 +11,36 @@ namespace AILogic
             public DateTime Timestamp;
         }
 
-        // State: [x, y, vx, vy]
+        // State variables
         private double _x, _y, _vx, _vy;
-
-        // Covariance matrix (4x4 simplified to diagonal)
-        private double _p00 = 1.0, _p11 = 1.0, _p22 = 1.0, _p33 = 1.0;
-
-        // Tuning parameters
-        private const double ProcessNoise = 0.1;
-        private const double MeasurementNoise = 0.5;
-        private const double MaxVelocity = 5000.0;
-
-        private DateTime _lastUpdateTime = DateTime.UtcNow;
+        private double _px, _py, _pvx, _pvy;
+        private DateTime _lastUpdateTime;
         private bool _initialized = false;
+
+        // Velocity history for smoothing
+        private Queue<double> _vxHistory = new Queue<double>(5);
+        private Queue<double> _vyHistory = new Queue<double>(5);
+
+        // Last prediction for deadzone
+        private int _lastPredictedX, _lastPredictedY;
+
+        // Tuning parameters - MUCH heavier smoothing
+        private const double POSITION_PROCESS_NOISE = 0.07;      // Reduced 10x
+        private const double VELOCITY_PROCESS_NOISE = 0.7;       // Reduced 10x
+        private const double MEASUREMENT_NOISE = 8.0;           // Increased 4x (trust measurements less)
+        private const double MAX_VELOCITY = 1000.0;               // Reduced max velocity
+        private const double MIN_CONFIDENCE = 0.1;                // Minimum Kalman gain
+        private double VELOCITY_SMOOTHING = (double)Dictionary.sliderSettings["Kalman Smoothness"];
+        private const int DEADZONE_THRESHOLD = 1;                  // Don't move if prediction changes by less than 2 pixels
+
+        public KalmanPrediction()
+        {
+            Reset();
+        }
 
         public void UpdateKalmanFilter(Detection detection)
         {
-            var now = DateTime.UtcNow;
+            DateTime now = detection.Timestamp;
 
             if (!_initialized)
             {
@@ -35,91 +48,166 @@ namespace AILogic
                 _y = detection.Y;
                 _vx = 0;
                 _vy = 0;
+
+                _px = 100;
+                _py = 100;
+                _pvx = 100;
+                _pvy = 100;
+
+                // Clear history
+                _vxHistory.Clear();
+                _vyHistory.Clear();
+                for (int i = 0; i < 5; i++)
+                {
+                    _vxHistory.Enqueue(0);
+                    _vyHistory.Enqueue(0);
+                }
+
                 _lastUpdateTime = now;
                 _initialized = true;
                 return;
             }
 
-            // Calculate time step, clamped between 1ms and 100ms
             double dt = (now - _lastUpdateTime).TotalSeconds;
             dt = Math.Clamp(dt, 0.001, 0.1);
 
-            // Prediction step
-            double predictedX = _x + _vx * dt;
-            double predictedY = _y + _vy * dt;
+            // PREDICTION STEP
+            double predX = _x + _vx * dt;
+            double predY = _y + _vy * dt;
 
-            // Update covariance (add process noise)
-            _p00 += ProcessNoise;
-            _p11 += ProcessNoise;
-            _p22 += ProcessNoise * 10; // Higher noise for velocity
-            _p33 += ProcessNoise * 10;
+            // Much smaller uncertainty growth
+            _px += POSITION_PROCESS_NOISE * dt;
+            _py += POSITION_PROCESS_NOISE * dt;
+            _pvx += VELOCITY_PROCESS_NOISE * dt;
+            _pvy += VELOCITY_PROCESS_NOISE * dt;
 
-            // Innovation (measurement residual)
-            double innovationX = detection.X - predictedX;
-            double innovationY = detection.Y - predictedY;
+            // Cap uncertainty to prevent runaway
+            _px = Math.Min(_px, 100);
+            _py = Math.Min(_py, 100);
+            _pvx = Math.Min(_pvx, 100);
+            _pvy = Math.Min(_pvy, 100);
 
-            // Kalman gain (simplified for position measurements)
-            double K = _p00 / (_p00 + MeasurementNoise);
+            // UPDATE STEP
+            double innovX = detection.X - predX;
+            double innovY = detection.Y - predY;
 
-            // Update state
-            _x = predictedX + K * innovationX;
-            _y = predictedY + K * innovationY;
+            // Calculate innovation magnitude
+            double innovMagnitude = Math.Sqrt(innovX * innovX + innovY * innovY);
 
-            // Update velocity based on innovation
-            _vx += K * innovationX / dt;
-            _vy += K * innovationY / dt;
+            // Adaptive gain based on innovation size
+            // If innovation is large (target moved a lot), increase gain slightly
+            // But still keep it low overall
+            double baseGain = 0.15; // Very low base gain
+            double adaptiveBoost = Math.Min(0.2, innovMagnitude / 100.0);
+            double adaptiveGain = Math.Clamp(baseGain + adaptiveBoost, 0.1, 0.35);
 
-            // Clamp velocity to reasonable values
-            _vx = Math.Clamp(_vx, -MaxVelocity, MaxVelocity);
-            _vy = Math.Clamp(_vy, -MaxVelocity, MaxVelocity);
+            // Kalman gains (squash them to be very conservative)
+            double kx = Math.Min(_px / (_px + MEASUREMENT_NOISE), adaptiveGain);
+            double ky = Math.Min(_py / (_py + MEASUREMENT_NOISE), adaptiveGain);
+
+            // Update position with very conservative gain
+            _x = predX + kx * innovX;
+            _y = predY + ky * innovY;
+
+            // Calculate raw velocity
+            double rawVx = innovX / dt;
+            double rawVy = innovY / dt;
+
+            // Clamp raw velocity to prevent spikes
+            rawVx = Math.Clamp(rawVx, -MAX_VELOCITY, MAX_VELOCITY);
+            rawVy = Math.Clamp(rawVy, -MAX_VELOCITY, MAX_VELOCITY);
+
+            // Add to history
+            _vxHistory.Enqueue(rawVx);
+            _vyHistory.Enqueue(rawVy);
+            if (_vxHistory.Count > 5)
+            {
+                _vxHistory.Dequeue();
+                _vyHistory.Dequeue();
+            }
+
+            // Use median instead of mean for velocity (rejects outliers)
+            double smoothedVx = Median(_vxHistory.ToArray());
+            double smoothedVy = Median(_vyHistory.ToArray());
+
+            // Heavy EMA smoothing on velocity
+            _vx = _vx * VELOCITY_SMOOTHING + smoothedVx * (1 - VELOCITY_SMOOTHING);
+            _vy = _vy * VELOCITY_SMOOTHING + smoothedVy * (1 - VELOCITY_SMOOTHING);
+
+            // Final velocity clamp
+            _vx = Math.Clamp(_vx, -MAX_VELOCITY * 0.5, MAX_VELOCITY * 0.5); // Even lower max for smoothness
+            _vy = Math.Clamp(_vy, -MAX_VELOCITY * 0.5, MAX_VELOCITY * 0.5);
 
             // Update covariance
-            _p00 *= (1 - K);
-            _p11 *= (1 - K);
+            _px *= (1 - kx);
+            _py *= (1 - ky);
+            _pvx *= 0.95; // Decay velocity uncertainty
+            _pvy *= 0.95;
 
             _lastUpdateTime = now;
         }
 
         public Detection GetKalmanPosition(double mouseSpeed = 0)
         {
-            var now = DateTime.UtcNow;
+            DateTime now = DateTime.UtcNow;
             double dt = (now - _lastUpdateTime).TotalSeconds;
+            dt = Math.Clamp(dt, 0.001, 0.1);
 
-            // Predict current position based on time since last update
+            // Current position
             double currentX = _x + _vx * dt;
             double currentY = _y + _vy * dt;
 
-            // Get base lead time from settings
-            double leadTime = (double)Dictionary.sliderSettings["Kalman Lead Time"];
+            // Only predict if velocity is significant
+            double speed = Math.Sqrt(_vx * _vx + _vy * _vy);
+            double leadTime = 0;
 
-            // Dynamically adjust based on mouse speed if available
-            if (mouseSpeed > 0.0)
+            if (speed > 10) // Only predict if moving faster than 10 pixels/sec
             {
-                // Estimate animation completion time from mouse speed
-                double estimatedCompletionTime = 100.0 / mouseSpeed;
-                double dynamicLead = estimatedCompletionTime * 0.4; // Use 40% of completion time
-                // Scale by user setting (setting acts as multiplier around the dynamic value)
-                leadTime = dynamicLead * (leadTime / 0.10); // 0.10 is the default, so setting of 0.10 = 1x multiplier
-                leadTime = Math.Clamp(leadTime, 0.02, 0.3); // Cap to reasonable range
+                leadTime = (double)Dictionary.sliderSettings["Kalman Lead Time"];
+
+                // Reduce lead time based on speed (less prediction for fast targets to prevent overshoot)
+                if (speed > 100)
+                {
+                    leadTime *= (100 / speed);
+                }
             }
 
-            // Predict where target will be after lead time
-            double predictedX = currentX + _vx * leadTime;
-            double predictedY = currentY + _vy * leadTime;
+            // Predict future position
+            int predictedX = (int)(currentX + _vx * leadTime);
+            int predictedY = (int)(currentY + _vy * leadTime);
+
+            // // Apply deadzone - don't change prediction if movement is tiny
+            // if (Math.Abs(predictedX - _lastPredictedX) < DEADZONE_THRESHOLD)
+            //     predictedX = _lastPredictedX;
+            // if (Math.Abs(predictedY - _lastPredictedY) < DEADZONE_THRESHOLD)
+            //     predictedY = _lastPredictedY;
+
+            _lastPredictedX = predictedX;
+            _lastPredictedY = predictedY;
 
             return new Detection
             {
-                X = (int)predictedX,
-                Y = (int)predictedY,
+                X = predictedX,
+                Y = predictedY,
                 Timestamp = now
             };
+        }
+
+        private double Median(double[] values)
+        {
+            if (values.Length == 0) return 0;
+            var sorted = values.OrderBy(x => x).ToArray();
+            return sorted[sorted.Length / 2];
         }
 
         public void Reset()
         {
             _x = _y = _vx = _vy = 0;
-            _p00 = _p11 = _p22 = _p33 = 1.0;
+            _px = _py = _pvx = _pvy = 1.0;
             _initialized = false;
+            _lastPredictedX = _lastPredictedY = 0;
+            _vxHistory.Clear();
+            _vyHistory.Clear();
         }
     }
 

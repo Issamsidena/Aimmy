@@ -1134,6 +1134,7 @@ namespace Aimmy2
                 ("Auto Trigger Delay", uiManager.S_AutoTriggerDelay, 0.25),
                 ("AI Minimum Confidence", uiManager.S_AIMinimumConfidence, 50.0),
                 ("Kalman Lead Time", uiManager.S_KalmanLeadTime, 0.10),
+                ("Kalman Smoothness", uiManager.S_KalmanSmoothness, 0.5),
                 ("WiseTheFox Lead Time", uiManager.S_WiseTheFoxLeadTime, 0.15),
                 ("Shalloe Lead Multiplier", uiManager.S_ShalloeLeadMultiplier, 3.0)
             };
@@ -1210,6 +1211,8 @@ namespace Aimmy2
             // Hide all prediction sliders first
             if (uiManager.S_KalmanLeadTime != null)
                 uiManager.S_KalmanLeadTime.Visibility = Visibility.Collapsed;
+            if (uiManager.S_KalmanSmoothness != null)
+                uiManager.S_KalmanSmoothness.Visibility = Visibility.Collapsed;
             if (uiManager.S_WiseTheFoxLeadTime != null)
                 uiManager.S_WiseTheFoxLeadTime.Visibility = Visibility.Collapsed;
             if (uiManager.S_ShalloeLeadMultiplier != null)
@@ -1229,6 +1232,8 @@ namespace Aimmy2
                 case "Kalman Filter":
                     if (uiManager.S_KalmanLeadTime != null)
                         uiManager.S_KalmanLeadTime.Visibility = Visibility.Visible;
+                    if (uiManager.S_KalmanSmoothness != null)
+                        uiManager.S_KalmanSmoothness.Visibility = Visibility.Visible;
                     break;
                 case "Shall0e's Prediction":
                     if (uiManager.S_ShalloeLeadMultiplier != null)
