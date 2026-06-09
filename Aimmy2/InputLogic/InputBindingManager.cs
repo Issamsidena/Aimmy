@@ -26,6 +26,48 @@ namespace InputLogic
 
         public static bool IsHoldingBinding(string bindingId) => isHolding.TryGetValue(bindingId, out bool holding) && holding;
 
+        // Rapid Fire injects synthetic mouse clicks. When its keybind is a mouse button (e.g. "Left"),
+        // those clicks echo back through this global hook and would corrupt the hold state. We record
+        // a bounded, self-expiring count of expected echoes per button and drop them when they arrive.
+        private static readonly Dictionary<string, Queue<long>> _injectedEchoes = new();
+        private static readonly object _echoSync = new();
+        private const long InjectedEchoTtlMs = 100;
+
+        // Call once per synthetic click pair (down + up) before injecting.
+        public static void RegisterInjectedClick(string button)
+        {
+            lock (_echoSync)
+            {
+                if (!_injectedEchoes.TryGetValue(button, out var q))
+                {
+                    q = new Queue<long>();
+                    _injectedEchoes[button] = q;
+                }
+                long now = Environment.TickCount64;
+                q.Enqueue(now); // down echo
+                q.Enqueue(now); // up echo
+            }
+        }
+
+        private static bool ConsumeInjectedEcho(string input)
+        {
+            lock (_echoSync)
+            {
+                if (!_injectedEchoes.TryGetValue(input, out var q) || q.Count == 0)
+                    return false;
+
+                long now = Environment.TickCount64;
+                while (q.Count > 0 && now - q.Peek() > InjectedEchoTtlMs)
+                    q.Dequeue();
+
+                if (q.Count == 0)
+                    return false;
+
+                q.Dequeue();
+                return true;
+            }
+        }
+
         public void SetupDefault(string bindingId, string keyCode)
         {
             lock (_sync)
@@ -93,6 +135,10 @@ namespace InputLogic
 
         private void HandleDown(string input)
         {
+            // Drop echoes from our own injected clicks (unless the user is rebinding a key right now).
+            if (settingBindingId == null && ConsumeInjectedEcho(input))
+                return;
+
             string? bindingToSet = null;
             var pressed = new List<string>();
 
@@ -130,6 +176,9 @@ namespace InputLogic
 
         private void HandleUp(string input)
         {
+            if (ConsumeInjectedEcho(input))
+                return;
+
             var released = new List<string>();
 
             lock (_sync)

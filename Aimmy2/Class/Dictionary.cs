@@ -19,6 +19,7 @@ namespace Aimmy2.Class
             { "Model Switch Keybind", "OemPipe"},
             { "Anti Recoil Keybind", "Left"},
             { "Enable/Disable Anti Recoil Keybind", "End"},
+            { "Rapid Fire Keybind", "Left"},
             { "Gun 1 Key", "D1"},
             { "Gun 2 Key", "D2"},
             { "Gun 3 Key", "D3"}
@@ -31,6 +32,14 @@ namespace Aimmy2.Class
             { "Dynamic FOV Size", 200 },
             { "Mouse Sensitivity (+/-)", 0.80 },
             { "Mouse Jitter", 4 },
+            // Movement Path per-curve tuning. Defaults reproduce the old hardcoded behavior:
+            { "Curve Strength", 0.0 },        // Cubic Bezier: 0 = collinear control points (original straight bow)
+            { "Exponent Strength", 3.0 },     // Exponential: was MovementPaths.Exponential(..., 3.0)
+            { "Adaptation Strength", 100.0 }, // Adaptive: was the default threshold of 100.0
+            { "Noise Level", 20.0 },          // Perlin Noise: was the amplitude of 20
+            // Anti Recoil Timeout: per-axis timeout in seconds (0.0 - 20.0), shown only when the toggle is on.
+            { "Timeout Y", 0.0 },
+            { "Timeout X", 0.0 },
             { "Sticky Aim Threshold", 50 },
             { "Approach Speed", 0.6 },
             { "Approach Threshold", 50 },
@@ -45,6 +54,7 @@ namespace Aimmy2.Class
             { "WiseTheFox Lead Time", 0.15 },
             { "Shalloe Lead Multiplier", 3.0 },
             { "Auto Trigger Delay", 0.1 },
+            { "Rapid Fire Delay", 50 },
             { "AI Minimum Confidence", 45 },
             { "AI Confidence Font Size", 20 },
             { "Corner Radius", 0 },
@@ -57,6 +67,7 @@ namespace Aimmy2.Class
         public static Dictionary<string, dynamic> toggleState = new()
         {
             { "Aim Assist", false },
+            { "Persistent Target Lock", false },
             { "Sticky Aim", false },
             { "Snap Lock", false },
             { "Constant AI Tracking", false },
@@ -65,6 +76,7 @@ namespace Aimmy2.Class
             { "EMA Smoothening", false },
             { "Enable Model Switch Keybind", true },
             { "Auto Trigger", false },
+            { "Rapid Fire", false },
             { "FOV", false },
             { "Dynamic FOV", false },
             { "Third Person Support", false },
@@ -74,6 +86,7 @@ namespace Aimmy2.Class
             { "Spray Mode", false },
             //{ "Only When Held", false },
             { "Anti Recoil", false },
+            { "Anti Recoil Timeout", false },
             { "Adaptive Recoil", false },
             { "Enable Gun Switching Keybind", false },
             { "Show FOV", true },
@@ -98,6 +111,7 @@ namespace Aimmy2.Class
             { "Aim Config", false },
             { "Predictions", false },
             { "Auto Trigger", false },
+            { "Rapid Fire", false },
             { "Anti Recoil", false },
             { "Anti Recoil Config", false },
             { "FOV Config", false },
@@ -118,6 +132,7 @@ namespace Aimmy2.Class
             { "Screen Capture Method", "DirectX" },
             { "Tracer Position", "Bottom" },
             { "Movement Path", "None" },
+            { "Mouse Curve", "Linear" },
             { "Image Size", "640" },
             { "Target Class", "Smart Detection" },
             { "Target Priority", "Best Confidence" }

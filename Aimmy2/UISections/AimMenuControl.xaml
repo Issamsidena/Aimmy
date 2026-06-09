@@ -18,6 +18,7 @@
                 <StackPanel x:Name="AimAssist" />
                 <StackPanel x:Name="Predictions" />
                 <StackPanel x:Name="TriggerBot" />
+                <StackPanel x:Name="RapidFire" />
                 <StackPanel x:Name="AntiRecoil" />
                 <StackPanel x:Name="ESPConfig" />
             </StackPanel>

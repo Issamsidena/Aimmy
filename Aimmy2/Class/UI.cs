@@ -13,6 +13,7 @@ namespace Class
 
         public AKeyChanger? C_Keybind { get; set; }
         public AToggle? T_ConstantAITracking { get; set; }
+        public AToggle? T_PersistentTargetLock { get; set; }
         public AToggle? T_StickyAim { get; set; }
         public AToggle? T_SnapLock { get; set; }
         public ASlider? S_ApproachSpeed { get; set; }
@@ -31,6 +32,7 @@ namespace Class
 
         public ADropdown? D_PredictionMethod { get; set; }
         public ADropdown? D_MovementPath { get; set; }
+        public ADropdown? D_MouseCurve { get; set; }
         public ADropdown? D_DetectionAreaType { get; set; }
         public ComboBoxItem? DDI_ClosestToCenterScreen { get; set; }
         public ADropdown? D_AimingBoundariesAlignment { get; set; }
@@ -62,9 +64,18 @@ namespace Class
 
         public ASlider? S_AutoTriggerDelay { get; set; }
 
+        // Rapid Fire
+        public ATitle? AT_RapidFire { get; set; }
+        public AToggle? T_RapidFire { get; set; }
+        public AKeyChanger? C_RapidFireKeybind { get; set; }
+        public ASlider? S_RapidFireDelay { get; set; }
+
         // Anti Recoil
         public ATitle? AT_AntiRecoil { get; set; }
         public AToggle? T_AntiRecoil { get; set; }
+        public AToggle? T_AntiRecoilTimeout { get; set; }
+        public ASlider? S_TimeoutY { get; set; }
+        public ASlider? S_TimeoutX { get; set; }
         public AToggle? T_AdaptiveRecoil { get; set; }
         public AKeyChanger? C_AntiRecoilKeybind { get; set; }
         public AKeyChanger? C_ToggleAntiRecoilKeybind { get; set; }

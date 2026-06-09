@@ -92,6 +92,25 @@ namespace Aimmy2.AILogic
         private const float REFERENCE_TARGET_SIZE = 10000f; // Reference area for "close" targets (approx 100x100)
         private int _framesWithoutMatch = 0;           // Consecutive frames where current target wasn't found
 
+        // Persistent Target Lock state.
+        // The lock is tracked by ABSOLUTE screen coordinates (frame-stable), NOT a Prediction
+        // object, because the capture/detection box re-centers on the mouse every frame and a
+        // box-local Rectangle from a previous frame would drift. We NEVER aim at a stored
+        // prediction; we only ever match the lock to a detection in the CURRENT frame.
+        private bool _hasLock = false;
+        private float _lockedScreenX = 0f;
+        private float _lockedScreenY = 0f;
+        private float _lockedVelX = 0f;   // EMA of per-frame screen movement (constant-velocity predictor)
+        private float _lockedVelY = 0f;
+        private float _lockedArea = 0f;
+        private DateTime _lastEngagedTime = DateTime.MinValue;
+        private DateTime _lockLostSince = DateTime.MinValue; // when the locked enemy first went missing
+        private const double ENGAGEMENT_GAP_MS = 250; // gap since last engaged frame => treat as a fresh engagement
+        // How long the locked enemy must stay un-matched before we treat it as DEAD and auto-switch.
+        // Long enough that a brief detection flicker on a still-alive enemy won't switch us off it,
+        // short enough that switching after a real kill feels immediate.
+        private const double LOCK_DEATH_CONFIRM_MS = 40;
+
         private double CenterXTranslated = 0;
         private double CenterYTranslated = 0;
 
@@ -1069,7 +1088,9 @@ namespace Aimmy2.AILogic
                         KDPredictions, priorityMode, IMAGE_SIZE / 2f, IMAGE_SIZE / 2f);
                 }
 
-                Prediction? finalTarget = HandleStickyAim(bestCandidate, KDPredictions);
+                Prediction? finalTarget = Dictionary.toggleState["Persistent Target Lock"]
+                    ? HandlePersistentLock(bestCandidate, KDPredictions)
+                    : HandleStickyAim(bestCandidate, KDPredictions);
                 if (finalTarget != null)
                 {
                     UpdateDetectionBox(finalTarget, detectionBox);
@@ -1085,6 +1106,169 @@ namespace Aimmy2.AILogic
                 frame.Dispose();
                 results?.Dispose();
             }
+        }
+
+        // Persistent Target Lock: commit to ONE target and stay on it until it DIES, then auto-switch.
+        //
+        // Behavior (per the user):
+        //   * Pressing the aim key locks onto the enemy you are AIMING AT (nearest box to the
+        //     crosshair), ignoring the Target Priority dropdown.
+        //   * While that enemy is ALIVE we stay on it and never switch -- nearby/crossing enemies
+        //     cannot steal the lock.
+        //   * When the locked enemy DIES, we auto-switch to the enemy nearest the crosshair, with
+        //     NO aim-key re-press. A short confirm window separates a real kill from a brief
+        //     detection flicker so we don't switch off a still-alive enemy.
+        //   * Releasing the aim key ends the engagement; pressing again acquires a fresh target.
+        //
+        // This NEVER returns a stale prediction: the only thing returned is a detection from the
+        // CURRENT frame, matched to the lock by absolute screen position + size similarity.
+        private Prediction? HandlePersistentLock(Prediction? bestCandidate, List<Prediction> KDPredictions)
+        {
+            bool constantTracking = Dictionary.toggleState["Constant AI Tracking"];
+            bool aimKeyHeld = InputBindingManager.IsHoldingBinding("Aim Keybind") ||
+                              InputBindingManager.IsHoldingBinding("Second Aim Keybind");
+            bool engaged = constantTracking || aimKeyHeld;
+
+            // Release on key up: not engaged => drop the lock so the next press acquires fresh.
+            if (!engaged)
+            {
+                _hasLock = false;
+                _lockLostSince = DateTime.MinValue;
+                return bestCandidate;
+            }
+
+            // Fresh engagement: if this function didn't run for a while (aim key was released and
+            // the AI loop went idle), treat this as a brand-new engagement.
+            var now = DateTime.UtcNow;
+            if ((now - _lastEngagedTime).TotalMilliseconds > ENGAGEMENT_GAP_MS)
+            {
+                _hasLock = false;
+                _lockLostSince = DateTime.MinValue;
+            }
+            _lastEngagedTime = now;
+
+            float crosshair = IMAGE_SIZE / 2f; // box-local crosshair position
+
+            // No active lock yet: lock onto the enemy the user is AIMING AT (nearest box to the
+            // crosshair). We intentionally IGNORE the Target Priority dropdown here -- persistent
+            // lock commits to the enemy you point at, not the algorithm's "best confidence /
+            // closest distance" pick.
+            if (!_hasLock)
+            {
+                Prediction? acquire = SelectBestPredictionByTargetPriority(
+                    KDPredictions, "Closest Crosshair", crosshair, crosshair);
+                if (acquire == null) return null;
+                SetLock(acquire);
+                ResetPredictionFilters();
+                _lockLostSince = DateTime.MinValue;
+                return acquire;
+            }
+
+            // We have a lock. Find the SAME enemy in THIS frame and aim only at it. Every other
+            // detection is ignored here, so nothing can steal the lock while the enemy is alive.
+            Prediction? matched = MatchLockedTarget(KDPredictions);
+            if (matched != null)
+            {
+                _lockLostSince = DateTime.MinValue;
+                UpdateLock(matched); // track the locked enemy as it moves (position + velocity)
+                return matched;
+            }
+
+            // Locked enemy not found this frame. Start/continue the death-confirm timer.
+            if (_lockLostSince == DateTime.MinValue) _lockLostSince = now;
+
+            if ((now - _lockLostSince).TotalMilliseconds < LOCK_DEATH_CONFIRM_MS)
+            {
+                // Probably a brief flicker, not a kill: hold the lock, but don't aim at a ghost.
+                return null;
+            }
+
+            // The locked enemy has been gone long enough -> it's dead. Auto-switch to the enemy
+            // nearest the crosshair (where we were just aiming), with no aim-key re-press.
+            Prediction? next = SelectBestPredictionByTargetPriority(
+                KDPredictions, "Closest Crosshair", crosshair, crosshair);
+            if (next != null)
+            {
+                SetLock(next);
+                ResetPredictionFilters(); // avoid overshoot/stutter when snapping to the new target
+                _lockLostSince = DateTime.MinValue;
+                return next;
+            }
+
+            // No enemy on screen yet; keep the lock cleared so we re-acquire the instant one appears.
+            _hasLock = false;
+            _lockLostSince = DateTime.MinValue;
+            return null;
+        }
+
+        // Fresh acquire: snap the lock onto a brand-new target with no movement history.
+        private void SetLock(Prediction target)
+        {
+            _hasLock = true;
+            _lockedScreenX = target.ScreenCenterX;
+            _lockedScreenY = target.ScreenCenterY;
+            _lockedArea = target.Rectangle.Width * target.Rectangle.Height;
+            _lockedVelX = 0f;
+            _lockedVelY = 0f;
+        }
+
+        // Clear the aim-smoothing/prediction filters. Call this when the lock jumps to a brand-new
+        // target so the predictor doesn't carry the old target's velocity and overshoot the new one
+        // (the "jump, stop, jump" stutter on a death-switch).
+        private void ResetPredictionFilters()
+        {
+            kalmanPrediction.Reset();
+            wtfpredictionManager.Reset();
+            ShalloePredictionV2.Reset();
+        }
+
+        // Continue an existing lock: update its position AND its velocity (EMA of per-frame
+        // movement) so MatchLockedTarget can predict where it'll be next frame.
+        private void UpdateLock(Prediction matched)
+        {
+            float dx = matched.ScreenCenterX - _lockedScreenX;
+            float dy = matched.ScreenCenterY - _lockedScreenY;
+            _lockedVelX = _lockedVelX * 0.5f + dx * 0.5f;
+            _lockedVelY = _lockedVelY * 0.5f + dy * 0.5f;
+            _lockedScreenX = matched.ScreenCenterX;
+            _lockedScreenY = matched.ScreenCenterY;
+            _lockedArea = matched.Rectangle.Width * matched.Rectangle.Height;
+        }
+
+        // Finds the detection in the current frame that is the SAME enemy as the lock. We match
+        // against the PREDICTED position (last position + velocity), not the stale last position,
+        // so a fast-moving live target stays matched (no false "lost target -> switch to best")
+        // and an enemy crossing the other way is rejected because it's far from the prediction.
+        private Prediction? MatchLockedTarget(List<Prediction> predictions)
+        {
+            float lockedSize = MathF.Sqrt(Math.Max(_lockedArea, 1f));
+            // Because we match against the predicted position, this radius only needs to cover the
+            // prediction error (acceleration/jitter), not the full per-frame movement. Keep it
+            // moderate: tight enough that a different enemy can't be mistaken for the lock.
+            float maxDist = Math.Clamp(lockedSize * 0.8f, 40f, 100f);
+            float maxDistSq = maxDist * maxDist;
+
+            float predX = _lockedScreenX + _lockedVelX;
+            float predY = _lockedScreenY + _lockedVelY;
+
+            Prediction? best = null;
+            float bestDistSq = float.MaxValue;
+
+            foreach (var p in predictions)
+            {
+                float area = p.Rectangle.Width * p.Rectangle.Height;
+                float sizeRatio = MathF.Min(area, _lockedArea) / MathF.Max(area, Math.Max(_lockedArea, 1f));
+                if (sizeRatio < 0.4f) continue; // too different in size to be the same enemy
+
+                float distSq = GetDistanceSq(p.ScreenCenterX, p.ScreenCenterY, predX, predY);
+                if (distSq < bestDistSq && distSq <= maxDistSq)
+                {
+                    bestDistSq = distSq;
+                    best = p;
+                }
+            }
+
+            return best;
         }
 
         private Prediction? HandleStickyAim(Prediction? bestCandidate, List<Prediction> KDPredictions)

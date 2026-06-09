@@ -28,6 +28,7 @@ namespace Aimmy2
         private readonly Lazy<UI> _uiManager = new(() => new UI());
         private Lazy<FileManager>? _fileManager;
         private readonly Lazy<AntiRecoilManager> _arManager = new(() => new AntiRecoilManager());
+        private readonly Lazy<RapidFireManager> _rfManager = new(() => new RapidFireManager());
 
         // Windows
         private static readonly Lazy<FOV> _fovWindow = new(() =>
@@ -54,6 +55,7 @@ namespace Aimmy2
         public static GithubManager githubManager => _githubManager.Value;
         public UI uiManager => _uiManager.Value;
         public AntiRecoilManager arManager => _arManager.Value;
+        public RapidFireManager rfManager => _rfManager.Value;
 
         #endregion
 
@@ -227,6 +229,13 @@ namespace Aimmy2
                     SaveDictionary.LoadJSON(dict, path);
                 }
 
+                // These features always start OFF, regardless of the persisted config, so the toggle's
+                // visual state and the actual behavior always agree on launch.
+                Dictionary.toggleState["EMA Smoothening"] = false;
+                Dictionary.toggleState["Persistent Target Lock"] = false;
+                Dictionary.toggleState["Predictions"] = false;
+                Dictionary.toggleState["Rapid Fire"] = false;
+
                 MigrateLegacyDropdownValues();
             });
 
@@ -272,6 +281,7 @@ namespace Aimmy2
                 "Aim Keybind", "Second Aim Keybind", "Auto Trigger Keybind", "Dynamic FOV Keybind",
                 "Emergency Stop Keybind", "Model Switch Keybind",
                 "Anti Recoil Keybind", "Enable/Disable Anti Recoil Keybind",
+                "Rapid Fire Keybind",
                 "Gun 1 Key", "Gun 2 Key", "Gun 3 Key"
             };
 
@@ -282,6 +292,9 @@ namespace Aimmy2
 
             // Anti-recoil background loop is always on; it gates on toggle + key-hold internally.
             arManager.Start();
+
+            // Rapid Fire background loop is always on; it gates on toggle + key-hold internally.
+            rfManager.Start();
         }
 
         private void ConfigurePropertyChangers()
@@ -648,6 +661,14 @@ namespace Aimmy2
                 },
                 ["X Axis Percentage Adjustment"] = () => UpdateSliderVisibility(uiManager),
                 ["Y Axis Percentage Adjustment"] = () => UpdateSliderVisibility(uiManager),
+                ["Anti Recoil Timeout"] = () =>
+                {
+                    bool timeoutOn = Dictionary.toggleState["Anti Recoil Timeout"];
+                    if (uiManager.S_TimeoutY != null)
+                        uiManager.S_TimeoutY.Visibility = timeoutOn ? Visibility.Visible : Visibility.Collapsed;
+                    if (uiManager.S_TimeoutX != null)
+                        uiManager.S_TimeoutX.Visibility = timeoutOn ? Visibility.Visible : Visibility.Collapsed;
+                },
                 ["Adaptive Recoil"] = () =>
                 {
                     if (uiManager.P_AdaptiveRecoilOptions != null)
@@ -1182,9 +1203,17 @@ namespace Aimmy2
                     ["None"] = 0,
                     ["Cubic Bezier"] = 1,
                     ["Exponential"] = 2,
-                    ["Linear"] = 3,
-                    ["Adaptive"] = 4,
-                    ["Perlin Noise"] = 5
+                    ["Straight"] = 3,
+                    ["Smoothstep"] = 4,
+                    ["Adaptive"] = 5,
+                    ["Perlin Noise"] = 6
+                }),
+
+                ("Mouse Curve", uiManager.D_MouseCurve, new Dictionary<string, int>
+                {
+                    ["Linear"] = 0,
+                    ["Smooth/Legit"] = 1,
+                    ["Aggressive"] = 2
                 }),
 
                 ("Tracer Position", uiManager.D_TracerPosition, new Dictionary<string, int>
