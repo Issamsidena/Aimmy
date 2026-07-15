@@ -73,7 +73,8 @@ namespace Visuality
                 // Get window handle
                 var hwnd = _isInitialized ? new WindowInteropHelper(this).Handle : IntPtr.Zero;
 
-                // Set window state to normal first
+                // Keep the window in Normal state. A borderless Maximized window covers the
+                // taskbar and makes Windows treat it as a fullscreen app, which freezes the taskbar.
                 this.WindowState = WindowState.Normal;
 
                 // Position window to cover the current display (accounting for DPI scaling)
@@ -82,7 +83,7 @@ namespace Visuality
                 this.Width = DisplayManager.ScreenWidth / WinAPICaller.scalingFactorX;
                 this.Height = DisplayManager.ScreenHeight / WinAPICaller.scalingFactorY;
 
-                // Force position with Windows API if we have a handle
+                // Force exact pixel position/size with Windows API (instead of Maximize).
                 if (hwnd != IntPtr.Zero)
                 {
                     SetWindowPos(hwnd, IntPtr.Zero,
@@ -92,9 +93,6 @@ namespace Visuality
                         DisplayManager.ScreenHeight,
                         SWP_NOZORDER | SWP_NOACTIVATE);
                 }
-
-                // Maximize to cover entire display
-                this.WindowState = WindowState.Maximized;
 
                 // Update tracer start position (changed to be dynamic)
                 DetectedTracers.X1 = (DisplayManager.ScreenWidth / 2.0) / WinAPICaller.scalingFactorX;

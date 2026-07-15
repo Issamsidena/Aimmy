@@ -72,6 +72,13 @@
     <Resource Remove="AimmyV2 New\**" />
     <None Remove="AimmyV2 New\**" />
     <EmbeddedResource Remove="AimmyV2 New\**" />
+
+    <Compile Remove="Aimmy2 new\**" />
+    <Page Remove="Aimmy2 new\**" />
+    <ApplicationDefinition Remove="Aimmy2 new\**" />
+    <Resource Remove="Aimmy2 new\**" />
+    <None Remove="Aimmy2 new\**" />
+    <EmbeddedResource Remove="Aimmy2 new\**" />
   </ItemGroup>
 
   <ItemGroup>

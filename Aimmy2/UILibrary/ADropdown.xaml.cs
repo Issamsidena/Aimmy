@@ -1,5 +1,11 @@
 ﻿using Aimmy2.Class;
+using System;
+using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
+using System.Windows.Input;
+using System.Windows.Media;
+using System.Windows.Media.Animation;
 using UserControl = System.Windows.Controls.UserControl;
 
 namespace UILibrary
@@ -33,6 +39,27 @@ namespace UILibrary
             {
                 Dictionary.dropdownState[main_dictionary_path] = selectedItemContent;
             }
+        }
+
+        // Replace the default fade with a spring/overshoot "pop" when the dropdown opens.
+        private void DropdownBox_DropDownOpened(object sender, EventArgs e)
+        {
+            if (DropdownBox.Template?.FindName("PART_Popup", DropdownBox) is not Popup popup
+                || popup.Child is not FrameworkElement child)
+                return;
+
+            // Kill the built-in fade so our animation is the only effect.
+            popup.PopupAnimation = PopupAnimation.None;
+
+            var scale = new ScaleTransform(1, 0);
+            child.RenderTransform = scale;
+            child.RenderTransformOrigin = new Point(0.5, 0);
+
+            var anim = new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(320))
+            {
+                EasingFunction = new BackEase { EasingMode = EasingMode.EaseOut, Amplitude = 0.55 }
+            };
+            scale.BeginAnimation(ScaleTransform.ScaleYProperty, anim);
         }
     }
 }

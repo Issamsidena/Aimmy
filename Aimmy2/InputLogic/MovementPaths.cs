@@ -52,6 +52,14 @@ namespace InputLogic
             return new Point((int)x, (int)y);
         }
 
+        internal static Point Smoothstep(Point start, Point end, double t)
+        {
+            double smooth = t * t * (2.5 - 1.5 * t);
+            int x = (int)(start.X + (end.X - start.X) * smooth);
+            int y = (int)(start.Y + (end.Y - start.Y) * smooth);
+            return new Point(x, y);
+        }
+
         internal static Point Adaptive(Point start, Point end, double t, double threshold = 100.0)
         {
             double distance = Math.Sqrt(Math.Pow(end.X - start.X, 2) + Math.Pow(end.Y - start.Y, 2));

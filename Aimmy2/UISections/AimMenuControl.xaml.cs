@@ -24,6 +24,12 @@ namespace Aimmy2.Controls
         private MainWindow? _mainWindow;
         private bool _isInitialized;
 
+        // Movement Path per-curve sliders. Only the one matching the selected path is shown.
+        private ASlider? _curveStrengthSlider;
+        private ASlider? _exponentStrengthSlider;
+        private ASlider? _adaptationStrengthSlider;
+        private ASlider? _noiseLevelSlider;
+
         // Local minimize state management
         private readonly Dictionary<string, bool> _localMinimizeState = new()
         {
@@ -32,6 +38,7 @@ namespace Aimmy2.Controls
             { "Anti Recoil Config", false },
             { "Predictions", false },
             { "Auto Trigger", false },
+            { "Rapid Fire", false },
             { "Anti Recoil", false },
             { "FOV Config", false },
             { "ESP Config", false }
@@ -40,6 +47,7 @@ namespace Aimmy2.Controls
         // Public properties for MainWindow access
         public StackPanel AimAssistPanel => AimAssist;
         public StackPanel TriggerBotPanel => TriggerBot;
+        public StackPanel RapidFirePanel => RapidFire;
         public StackPanel ESPConfigPanel => ESPConfig;
         public StackPanel AimConfigPanel => AimConfig;
         public StackPanel PredictionsPanel => Predictions;
@@ -70,6 +78,7 @@ namespace Aimmy2.Controls
             LoadAimConfig();
             LoadPredictions();
             LoadTriggerBot();
+            LoadRapidFire();
             LoadAntiRecoil();
             LoadAntiRecoilConfig();
             LoadFOVConfig();
@@ -87,6 +96,26 @@ namespace Aimmy2.Controls
             // toggle handlers so they apply the correct hide/show based on toggleState.
             _mainWindow.Toggle_Action("Snap Lock");
             _mainWindow.Toggle_Action("Sticky Aim");
+            _mainWindow.Toggle_Action("Anti Recoil Timeout");
+
+            // ApplyMinimizeStates forced all Aim Config children visible; re-hide the Movement Path
+            // sliders that don't match the current selection.
+            UpdateMovementPathSliderVisibility();
+
+            // EMA Smoothening and Persistent Target Lock must always launch OFF. Force them off here,
+            // after the toggle controls exist, so the visual switch, the stored state, and the runtime
+            // effect all agree regardless of what was saved in toggles.cfg.
+            ForceFeatureOff("EMA Smoothening", _mainWindow.uiManager.T_EMASmoothing);
+            ForceFeatureOff("Persistent Target Lock", _mainWindow.uiManager.T_PersistentTargetLock);
+            ForceFeatureOff("Rapid Fire", _mainWindow.uiManager.T_RapidFire);
+        }
+
+        private void ForceFeatureOff(string title, AToggle? toggle)
+        {
+            Dictionary.toggleState[title] = false;
+            if (toggle != null)
+                _mainWindow!.UpdateToggleUI(toggle, false);
+            _mainWindow!.Toggle_Action(title);
         }
 
         #region Minimize State Management
@@ -117,6 +146,7 @@ namespace Aimmy2.Controls
             ApplyPanelState("Anti Recoil Config", AntiRecoilConfigPanel);
             ApplyPanelState("Predictions", PredictionsPanel);
             ApplyPanelState("Auto Trigger", TriggerBotPanel);
+            ApplyPanelState("Rapid Fire", RapidFirePanel);
             ApplyPanelState("Anti Recoil", AntiRecoilPanel);
             ApplyPanelState("FOV Config", FOVConfigPanel);
             ApplyPanelState("ESP Config", ESPConfigPanel);
@@ -218,6 +248,8 @@ namespace Aimmy2.Controls
                         }
                     };
                 }, tooltip: "Always track targets without holding a key. When off, you must hold the aim keybind.")
+                .AddToggle("Persistent Target Lock", t => uiManager.T_PersistentTargetLock = t,
+                    tooltip: "Commit to one target for the whole engagement. While holding the aim key it stays on that target instead of switching to a closer/newer enemy. Release the aim key (or move the crosshair directly onto another enemy) to pick a new target.")
                 .AddToggle("Sticky Aim", t => uiManager.T_StickyAim = t,
                     tooltip: "Lock onto a target until it moves out of range instead of switching targets.")
                 .AddSlider("Sticky Aim Threshold", "Pixels", 1, 1, 0, 100, s =>
@@ -286,11 +318,45 @@ namespace Aimmy2.Controls
                     _mainWindow.AddDropdownItem(d, "None");
                     _mainWindow.AddDropdownItem(d, "Cubic Bezier");
                     _mainWindow.AddDropdownItem(d, "Exponential");
-                    _mainWindow.AddDropdownItem(d, "Linear");
+                    _mainWindow.AddDropdownItem(d, "Straight");
+                    _mainWindow.AddDropdownItem(d, "Smoothstep");
                     _mainWindow.AddDropdownItem(d, "Adaptive");
                     _mainWindow.AddDropdownItem(d, "Perlin Noise");
                     Dictionary.dropdownState["Movement Path"] = "None";
+
+                    // Show only the slider that belongs to the chosen path (None/Straight/Smoothstep have none).
+                    d.DropdownBox.SelectionChanged += (s, e) => UpdateMovementPathSliderVisibility();
                 }, tooltip: "The curve style used when moving to a target. Affects how natural the movement looks.")
+                // Movement Path tuning sliders sit directly under the Movement Path dropdown. Hidden by
+                // default; UpdateMovementPathSliderVisibility reveals only the one matching the selection.
+                .AddSlider("Curve Strength", "Strength", 1, 1, 0, 100, s =>
+                {
+                    _curveStrengthSlider = s;
+                    s.Visibility = Visibility.Collapsed;
+                }, tooltip: "Cubic Bezier: how far the path bows out from a straight line. 0 = straight (original behavior).")
+                .AddSlider("Exponent Strength", "Exponent", 0.1, 0.1, 1, 5, s =>
+                {
+                    _exponentStrengthSlider = s;
+                    s.Visibility = Visibility.Collapsed;
+                }, tooltip: "Exponential: higher = the move accelerates harder toward the target. Default is 3.")
+                .AddSlider("Adaptation Strength", "Pixels", 1, 1, 10, 300, s =>
+                {
+                    _adaptationStrengthSlider = s;
+                    s.Visibility = Visibility.Collapsed;
+                }, tooltip: "Adaptive: distance threshold where it switches from straight to a curved path. Default is 100.")
+                .AddSlider("Noise Level", "Level", 1, 1, 0, 50, s =>
+                {
+                    _noiseLevelSlider = s;
+                    s.Visibility = Visibility.Collapsed;
+                }, tooltip: "Perlin Noise: how much random wobble is added to the path. Default is 20.")
+                .AddDropdown("Mouse Curve", d =>
+                {
+                    uiManager.D_MouseCurve = d;
+                    _mainWindow.AddDropdownItem(d, "Linear");
+                    _mainWindow.AddDropdownItem(d, "Smooth/Legit");
+                    _mainWindow.AddDropdownItem(d, "Aggressive");
+                    d.DropdownBox.SelectedIndex = 0;
+                }, tooltip: "Response curve for aim movement. Smooth/Legit = gentler and more human-like, Linear = unchanged, Aggressive = faster and snappier.")
                 .AddDropdown("Detection Area Type", d =>
                 {
                     d.DropdownBox.SelectedIndex = -1;
@@ -328,6 +394,27 @@ namespace Aimmy2.Controls
             // Add sliders with validation
             AddConfigSliders(builder, uiManager);
             builder.AddSeparator();
+
+            // Set initial slider visibility to match whatever Movement Path is currently selected.
+            UpdateMovementPathSliderVisibility();
+        }
+
+        // Shows only the tuning slider that belongs to the selected Movement Path.
+        // None / Straight / Smoothstep have no tunable parameter, so all are hidden for them.
+        private void UpdateMovementPathSliderVisibility()
+        {
+            string path = Dictionary.dropdownState.TryGetValue("Movement Path", out var v)
+                ? v?.ToString() ?? "None"
+                : "None";
+
+            if (_curveStrengthSlider != null)
+                _curveStrengthSlider.Visibility = path == "Cubic Bezier" ? Visibility.Visible : Visibility.Collapsed;
+            if (_exponentStrengthSlider != null)
+                _exponentStrengthSlider.Visibility = path == "Exponential" ? Visibility.Visible : Visibility.Collapsed;
+            if (_adaptationStrengthSlider != null)
+                _adaptationStrengthSlider.Visibility = path == "Adaptive" ? Visibility.Visible : Visibility.Collapsed;
+            if (_noiseLevelSlider != null)
+                _noiseLevelSlider.Visibility = path == "Perlin Noise" ? Visibility.Visible : Visibility.Collapsed;
         }
 
         private void AddConfigSliders(SectionBuilder builder, UI uiManager)
@@ -433,6 +520,12 @@ namespace Aimmy2.Controls
                     // Start collapsed - visibility will be set by LoadDropdownStates
                     s.Visibility = Visibility.Collapsed;
                 }, tooltip: "How far ahead to predict target position. Higher = more prediction, may overshoot.")
+                .AddSlider("Kalman Smoothness", "Amount", 0.01, 0.01, 0.01, 1.00, s =>
+                {
+                    uiManager.S_KalmanSmoothness = s;
+                    // Start collapsed - visibility will be set by LoadDropdownStates
+                    s.Visibility = Visibility.Collapsed;
+                }, tooltip: "How much to smooth out Kalman predictions")
                 .AddSlider("WiseTheFox Lead Time", "Seconds", 0.01, 0.01, 0.02, 0.30, s =>
                 {
                     uiManager.S_WiseTheFoxLeadTime = s;
@@ -489,6 +582,26 @@ namespace Aimmy2.Controls
                 //.AddToggle("Only When Held", t => uiManager.T_OnlyWhenHeld = t)
                 .AddSlider("Auto Trigger Delay", "Seconds", 0.01, 0.1, 0.01, 1, s => uiManager.S_AutoTriggerDelay = s,
                     tooltip: "Wait time before firing after detecting a target. Helps avoid accidental shots.")
+                .AddSeparator();
+        }
+
+        private void LoadRapidFire()
+        {
+            var uiManager = _mainWindow!.uiManager;
+            var builder = new SectionBuilder(this, RapidFire);
+
+            builder
+                .AddTitle("Rapid Fire", true, t =>
+                {
+                    uiManager.AT_RapidFire = t;
+                    t.Minimize.Click += (s, e) => TogglePanel("Rapid Fire", RapidFirePanel);
+                })
+                .AddToggle("Rapid Fire", t => uiManager.T_RapidFire = t,
+                    tooltip: "Auto-click rapidly while holding the Rapid Fire keybind.")
+                .AddKeyChanger("Rapid Fire Keybind", k => uiManager.C_RapidFireKeybind = k,
+                    tooltip: "Hold this key to rapid fire. Default is the Left mouse button.")
+                .AddSlider("Rapid Fire Delay", "Ms", 1, 1, 1, 500, s => uiManager.S_RapidFireDelay = s,
+                    tooltip: "Milliseconds between each click. Lower = faster clicking (min 1, max 500).")
                 .AddSeparator();
         }
 
@@ -619,6 +732,24 @@ namespace Aimmy2.Controls
                     uiManager.S_XAntiRecoilAdjustment = s;
                     s.Slider.IsSnapToTickEnabled = true;
                 }, tooltip: "Horizontal recoil compensation value.")
+                .AddToggle("Anti Recoil Timeout", t => uiManager.T_AntiRecoilTimeout = t,
+                    tooltip: "When on, the Timeout Y / Timeout X sliders apply a per-axis recoil timeout.")
+                .AddSlider("Timeout Y", "Seconds", 0.1, 0.1, 0.0, 20.0, s =>
+                {
+                    uiManager.S_TimeoutY = s;
+                    s.DecimalPlaces = 1;
+                    // Initial visibility follows the toggle state.
+                    s.Visibility = Dictionary.toggleState["Anti Recoil Timeout"]
+                        ? Visibility.Visible : Visibility.Collapsed;
+                }, tooltip: "Vertical recoil timeout.")
+                .AddSlider("Timeout X", "Seconds", 0.1, 0.1, 0.0, 20.0, s =>
+                {
+                    uiManager.S_TimeoutX = s;
+                    s.DecimalPlaces = 1;
+                    // Initial visibility follows the toggle state.
+                    s.Visibility = Dictionary.toggleState["Anti Recoil Timeout"]
+                        ? Visibility.Visible : Visibility.Collapsed;
+                }, tooltip: "Horizontal recoil timeout.")
                 .AddToggle("Adaptive Recoil", t => uiManager.T_AdaptiveRecoil = t,
                     tooltip: "When on, drift and spray-fade sliders apply while firing.");
 

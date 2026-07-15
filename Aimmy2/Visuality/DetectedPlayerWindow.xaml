@@ -8,7 +8,7 @@
         WindowStyle="None"
         AllowsTransparency="True"
         Background="Transparent"
-        WindowState="Maximized"
+        WindowState="Normal"
         Topmost="True"
         Focusable="False"
         ShowInTaskbar="False"

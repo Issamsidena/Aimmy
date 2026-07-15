@@ -11,6 +11,7 @@ using System.Drawing;
 using System.Drawing.Imaging;
 using System.IO;
 using System.Runtime.CompilerServices;
+using System.Runtime.ExceptionServices;
 using System.Windows;
 using Visuality;
 using static AILogic.MathUtil;
@@ -91,6 +92,25 @@ namespace Aimmy2.AILogic
         private const float MAX_LOCK_SCORE = 100f;     // Maximum accumulated score
         private const float REFERENCE_TARGET_SIZE = 10000f; // Reference area for "close" targets (approx 100x100)
         private int _framesWithoutMatch = 0;           // Consecutive frames where current target wasn't found
+
+        // Persistent Target Lock state.
+        // The lock is tracked by ABSOLUTE screen coordinates (frame-stable), NOT a Prediction
+        // object, because the capture/detection box re-centers on the mouse every frame and a
+        // box-local Rectangle from a previous frame would drift. We NEVER aim at a stored
+        // prediction; we only ever match the lock to a detection in the CURRENT frame.
+        private bool _hasLock = false;
+        private float _lockedScreenX = 0f;
+        private float _lockedScreenY = 0f;
+        private float _lockedVelX = 0f;   // EMA of per-frame screen movement (constant-velocity predictor)
+        private float _lockedVelY = 0f;
+        private float _lockedArea = 0f;
+        private DateTime _lastEngagedTime = DateTime.MinValue;
+        private DateTime _lockLostSince = DateTime.MinValue; // when the locked enemy first went missing
+        private const double ENGAGEMENT_GAP_MS = 250; // gap since last engaged frame => treat as a fresh engagement
+        // How long the locked enemy must stay un-matched before we treat it as DEAD and auto-switch.
+        // Long enough that a brief detection flicker on a still-alive enemy won't switch us off it,
+        // short enough that switching after a real kill feels immediate.
+        private const double LOCK_DEATH_CONFIRM_MS = 40;
 
         private double CenterXTranslated = 0;
         private double CenterYTranslated = 0;
@@ -275,6 +295,9 @@ namespace Aimmy2.AILogic
 
                 _onnxModel = new InferenceSession(modelPath, sessionOptions);
                 _outputNames = new List<string>(_onnxModel.OutputMetadata.Keys);
+                // Remember the model path + provider so the Performance Helper can rebuild sessions.
+                _modelPath = modelPath;
+                _usingDirectML = useDirectML;
 
                 // Validate the onnx model output shape (ensure model is OnnxV8)
                 if (!ValidateOnnxShape())
@@ -505,63 +528,86 @@ namespace Aimmy2.AILogic
                     }
                 }
 
+                // Pause the live loop while the Performance Helper benchmark owns the model session.
+                if (_benchmarkMode)
+                {
+                    await Task.Delay(10);
+                    continue;
+                }
+
                 stopwatch.Restart();
 
-                // Handle any pending display changes
-                _captureManager.HandlePendingDisplayChanges();
-
-                using (Benchmark("AILoopIteration"))
+                try
                 {
-                    UpdateFOV();
+                    // Handle any pending display changes
+                    _captureManager.HandlePendingDisplayChanges();
 
-                    if (ShouldProcess())
+                    using (Benchmark("AILoopIteration"))
                     {
-                        if (ShouldPredict())
+                        UpdateFOV();
+
+                        if (ShouldProcess())
                         {
-                            Prediction? closestPrediction;
-                            using (Benchmark("GetClosestPrediction"))
+                            if (ShouldPredict())
                             {
-                                closestPrediction = await GetClosestPrediction();
-                            }
+                                Prediction? closestPrediction;
+                                using (Benchmark("GetClosestPrediction"))
+                                {
+                                    // Serialize inference with the Performance Helper benchmark.
+                                    await _inferenceGate.WaitAsync();
+                                    try
+                                    {
+                                        closestPrediction = await GetClosestPrediction();
+                                    }
+                                    finally
+                                    {
+                                        _inferenceGate.Release();
+                                    }
+                                }
 
-                            if (closestPrediction == null)
+                                if (closestPrediction == null)
+                                {
+                                    DisableOverlay(DetectedPlayerOverlay!);
+                                    continue;
+                                }
+
+                                using (Benchmark("AutoTrigger"))
+                                {
+                                    await AutoTrigger();
+                                }
+
+                                using (Benchmark("CalculateCoordinates"))
+                                {
+                                    CalculateCoordinates(DetectedPlayerOverlay, closestPrediction, _scaleX, _scaleY);
+                                }
+
+                                using (Benchmark("HandleAim"))
+                                {
+                                    HandleAim(closestPrediction);
+                                }
+
+                                totalTime += stopwatch.ElapsedMilliseconds;
+                                iterationCount++;
+                            }
+                            else
                             {
-                                DisableOverlay(DetectedPlayerOverlay!);
-                                continue;
+                                // Processing so we are at the ready but not holding right/click.
+                                await Task.Delay(1);
                             }
-
-                            using (Benchmark("AutoTrigger"))
-                            {
-                                await AutoTrigger();
-                            }
-
-                            using (Benchmark("CalculateCoordinates"))
-                            {
-                                CalculateCoordinates(DetectedPlayerOverlay, closestPrediction, _scaleX, _scaleY);
-                            }
-
-                            using (Benchmark("HandleAim"))
-                            {
-                                HandleAim(closestPrediction);
-                            }
-
-                            totalTime += stopwatch.ElapsedMilliseconds;
-                            iterationCount++;
                         }
                         else
                         {
-                            // Processing so we are at the ready but not holding right/click.
+                            // No work to do—sleep briefly to free up CPU
                             await Task.Delay(1);
                         }
                     }
-                    else
-                    {
-                        // No work to do—sleep briefly to free up CPU
-                        await Task.Delay(1);
-                    }
                 }
-
-                stopwatch.Stop();
+                finally
+                {
+                    stopwatch.Stop();
+                    // Honor the user's "AI FPS Limit" slider (0 = uncapped).
+                    await ApplyFpsLimitAsync(stopwatch);
+                }
             }
         }
 
@@ -955,7 +1001,10 @@ namespace Aimmy2.AILogic
 
         private async Task<Prediction?> GetClosestPrediction(bool useMousePosition = true)
         {
-            //whats these variables for? - taylor 
+            // Reset per-call inference flag so the Performance Helper can count real inference frames.
+            _lastPredictionRanInference = false;
+
+            //whats these variables for? - taylor
             //int adjustedTargetX, adjustedTargetY;
 
             if (Dictionary.dropdownState["Detection Area Type"] == "Closest to Mouse")
@@ -1030,6 +1079,7 @@ namespace Aimmy2.AILogic
                 {
                     results = _onnxModel.Run(_reusableInputs, _outputNames, _modeloptions);
                     outputTensor = results[0].AsTensor<float>();
+                    _lastPredictionRanInference = true;
                 }
 
                 if (outputTensor == null)
@@ -1069,7 +1119,9 @@ namespace Aimmy2.AILogic
                         KDPredictions, priorityMode, IMAGE_SIZE / 2f, IMAGE_SIZE / 2f);
                 }
 
-                Prediction? finalTarget = HandleStickyAim(bestCandidate, KDPredictions);
+                Prediction? finalTarget = Dictionary.toggleState["Persistent Target Lock"]
+                    ? HandlePersistentLock(bestCandidate, KDPredictions)
+                    : HandleStickyAim(bestCandidate, KDPredictions);
                 if (finalTarget != null)
                 {
                     UpdateDetectionBox(finalTarget, detectionBox);
@@ -1085,6 +1137,169 @@ namespace Aimmy2.AILogic
                 frame.Dispose();
                 results?.Dispose();
             }
+        }
+
+        // Persistent Target Lock: commit to ONE target and stay on it until it DIES, then auto-switch.
+        //
+        // Behavior (per the user):
+        //   * Pressing the aim key locks onto the enemy you are AIMING AT (nearest box to the
+        //     crosshair), ignoring the Target Priority dropdown.
+        //   * While that enemy is ALIVE we stay on it and never switch -- nearby/crossing enemies
+        //     cannot steal the lock.
+        //   * When the locked enemy DIES, we auto-switch to the enemy nearest the crosshair, with
+        //     NO aim-key re-press. A short confirm window separates a real kill from a brief
+        //     detection flicker so we don't switch off a still-alive enemy.
+        //   * Releasing the aim key ends the engagement; pressing again acquires a fresh target.
+        //
+        // This NEVER returns a stale prediction: the only thing returned is a detection from the
+        // CURRENT frame, matched to the lock by absolute screen position + size similarity.
+        private Prediction? HandlePersistentLock(Prediction? bestCandidate, List<Prediction> KDPredictions)
+        {
+            bool constantTracking = Dictionary.toggleState["Constant AI Tracking"];
+            bool aimKeyHeld = InputBindingManager.IsHoldingBinding("Aim Keybind") ||
+                              InputBindingManager.IsHoldingBinding("Second Aim Keybind");
+            bool engaged = constantTracking || aimKeyHeld;
+
+            // Release on key up: not engaged => drop the lock so the next press acquires fresh.
+            if (!engaged)
+            {
+                _hasLock = false;
+                _lockLostSince = DateTime.MinValue;
+                return bestCandidate;
+            }
+
+            // Fresh engagement: if this function didn't run for a while (aim key was released and
+            // the AI loop went idle), treat this as a brand-new engagement.
+            var now = DateTime.UtcNow;
+            if ((now - _lastEngagedTime).TotalMilliseconds > ENGAGEMENT_GAP_MS)
+            {
+                _hasLock = false;
+                _lockLostSince = DateTime.MinValue;
+            }
+            _lastEngagedTime = now;
+
+            float crosshair = IMAGE_SIZE / 2f; // box-local crosshair position
+
+            // No active lock yet: lock onto the enemy the user is AIMING AT (nearest box to the
+            // crosshair). We intentionally IGNORE the Target Priority dropdown here -- persistent
+            // lock commits to the enemy you point at, not the algorithm's "best confidence /
+            // closest distance" pick.
+            if (!_hasLock)
+            {
+                Prediction? acquire = SelectBestPredictionByTargetPriority(
+                    KDPredictions, "Closest Crosshair", crosshair, crosshair);
+                if (acquire == null) return null;
+                SetLock(acquire);
+                ResetPredictionFilters();
+                _lockLostSince = DateTime.MinValue;
+                return acquire;
+            }
+
+            // We have a lock. Find the SAME enemy in THIS frame and aim only at it. Every other
+            // detection is ignored here, so nothing can steal the lock while the enemy is alive.
+            Prediction? matched = MatchLockedTarget(KDPredictions);
+            if (matched != null)
+            {
+                _lockLostSince = DateTime.MinValue;
+                UpdateLock(matched); // track the locked enemy as it moves (position + velocity)
+                return matched;
+            }
+
+            // Locked enemy not found this frame. Start/continue the death-confirm timer.
+            if (_lockLostSince == DateTime.MinValue) _lockLostSince = now;
+
+            if ((now - _lockLostSince).TotalMilliseconds < LOCK_DEATH_CONFIRM_MS)
+            {
+                // Probably a brief flicker, not a kill: hold the lock, but don't aim at a ghost.
+                return null;
+            }
+
+            // The locked enemy has been gone long enough -> it's dead. Auto-switch to the enemy
+            // nearest the crosshair (where we were just aiming), with no aim-key re-press.
+            Prediction? next = SelectBestPredictionByTargetPriority(
+                KDPredictions, "Closest Crosshair", crosshair, crosshair);
+            if (next != null)
+            {
+                SetLock(next);
+                ResetPredictionFilters(); // avoid overshoot/stutter when snapping to the new target
+                _lockLostSince = DateTime.MinValue;
+                return next;
+            }
+
+            // No enemy on screen yet; keep the lock cleared so we re-acquire the instant one appears.
+            _hasLock = false;
+            _lockLostSince = DateTime.MinValue;
+            return null;
+        }
+
+        // Fresh acquire: snap the lock onto a brand-new target with no movement history.
+        private void SetLock(Prediction target)
+        {
+            _hasLock = true;
+            _lockedScreenX = target.ScreenCenterX;
+            _lockedScreenY = target.ScreenCenterY;
+            _lockedArea = target.Rectangle.Width * target.Rectangle.Height;
+            _lockedVelX = 0f;
+            _lockedVelY = 0f;
+        }
+
+        // Clear the aim-smoothing/prediction filters. Call this when the lock jumps to a brand-new
+        // target so the predictor doesn't carry the old target's velocity and overshoot the new one
+        // (the "jump, stop, jump" stutter on a death-switch).
+        private void ResetPredictionFilters()
+        {
+            kalmanPrediction.Reset();
+            wtfpredictionManager.Reset();
+            ShalloePredictionV2.Reset();
+        }
+
+        // Continue an existing lock: update its position AND its velocity (EMA of per-frame
+        // movement) so MatchLockedTarget can predict where it'll be next frame.
+        private void UpdateLock(Prediction matched)
+        {
+            float dx = matched.ScreenCenterX - _lockedScreenX;
+            float dy = matched.ScreenCenterY - _lockedScreenY;
+            _lockedVelX = _lockedVelX * 0.5f + dx * 0.5f;
+            _lockedVelY = _lockedVelY * 0.5f + dy * 0.5f;
+            _lockedScreenX = matched.ScreenCenterX;
+            _lockedScreenY = matched.ScreenCenterY;
+            _lockedArea = matched.Rectangle.Width * matched.Rectangle.Height;
+        }
+
+        // Finds the detection in the current frame that is the SAME enemy as the lock. We match
+        // against the PREDICTED position (last position + velocity), not the stale last position,
+        // so a fast-moving live target stays matched (no false "lost target -> switch to best")
+        // and an enemy crossing the other way is rejected because it's far from the prediction.
+        private Prediction? MatchLockedTarget(List<Prediction> predictions)
+        {
+            float lockedSize = MathF.Sqrt(Math.Max(_lockedArea, 1f));
+            // Because we match against the predicted position, this radius only needs to cover the
+            // prediction error (acceleration/jitter), not the full per-frame movement. Keep it
+            // moderate: tight enough that a different enemy can't be mistaken for the lock.
+            float maxDist = Math.Clamp(lockedSize * 0.8f, 40f, 100f);
+            float maxDistSq = maxDist * maxDist;
+
+            float predX = _lockedScreenX + _lockedVelX;
+            float predY = _lockedScreenY + _lockedVelY;
+
+            Prediction? best = null;
+            float bestDistSq = float.MaxValue;
+
+            foreach (var p in predictions)
+            {
+                float area = p.Rectangle.Width * p.Rectangle.Height;
+                float sizeRatio = MathF.Min(area, _lockedArea) / MathF.Max(area, Math.Max(_lockedArea, 1f));
+                if (sizeRatio < 0.4f) continue; // too different in size to be the same enemy
+
+                float distSq = GetDistanceSq(p.ScreenCenterX, p.ScreenCenterY, predX, predY);
+                if (distSq < bestDistSq && distSq <= maxDistSq)
+                {
+                    bestDistSq = distSq;
+                    best = p;
+                }
+            }
+
+            return best;
         }
 
         private Prediction? HandleStickyAim(Prediction? bestCandidate, List<Prediction> KDPredictions)
@@ -1519,7 +1734,432 @@ namespace Aimmy2.AILogic
             _onnxModel?.Dispose();
             _modeloptions?.Dispose();
             _bitmapBuffer = null;
+            _inferenceGate.Dispose();
         }
+
+        #region AI FPS Limit + Performance Helper
+        // Copied from "Aimmy2 new" AILogic/AIManager.cs. Two call-site adaptations for the 2.8.0 engine:
+        //   * _stickyAimSelector.Reset() -> ResetStickyAimState()  (2.8.0 tracks sticky/target-lock inline; avoids importing StickyAimSelector.cs)
+        //   * ApplyFpsLimitAsync drops the CancellationToken        (2.8.0 AiLoop is gated by _isAiLoopRunning)
+
+        private static readonly TimeSpan BenchmarkWarmupMinimumDuration = TimeSpan.FromSeconds(5);
+        private static readonly TimeSpan BenchmarkWarmupMaximumDuration = TimeSpan.FromSeconds(20);
+        private static readonly TimeSpan BenchmarkSampleDuration = TimeSpan.FromSeconds(10);
+        private const int BenchmarkWarmupMinimumInferences = 30;
+        private const int BenchmarkStabilityWindow = 8;
+
+        private volatile bool _benchmarkMode;
+        private volatile bool _suppressOutputActions;
+        private volatile bool _lastPredictionRanInference;
+        private readonly SemaphoreSlim _inferenceGate = new(1, 1);
+        private bool _usingDirectML;
+        private string _modelPath = string.Empty;
+
+        public bool IsLoaded => _onnxModel != null && _outputNames != null;
+
+        private static async Task ApplyFpsLimitAsync(Stopwatch iterationStopwatch)
+        {
+            int fpsLimit = AimSettings.AiFpsLimit;
+            if (fpsLimit <= 0)
+                return;
+
+            double targetMilliseconds = 1000.0 / fpsLimit;
+            double remainingMilliseconds = targetMilliseconds - iterationStopwatch.Elapsed.TotalMilliseconds;
+            if (remainingMilliseconds > 1)
+            {
+                await Task.Delay((int)Math.Floor(remainingMilliseconds));
+            }
+        }
+
+        public async Task<PerformanceBenchmarkReport> RunPerformanceBenchmarkAsync(
+            IProgress<PerformanceBenchmarkProgress>? progress = null,
+            CancellationToken cancellationToken = default,
+            PerformanceGoal goal = PerformanceGoal.Balanced)
+        {
+            if (!IsLoaded)
+                throw new InvalidOperationException("Load a model before running the performance helper.");
+
+            int originalImageSize = IMAGE_SIZE;
+            int originalDetections = NUM_DETECTIONS;
+            InferenceSession? originalSession = _onnxModel;
+            List<string>? originalOutputNames = _outputNames;
+            bool originalUsingDirectML = _usingDirectML;
+            bool originalSizeChangePending;
+
+            lock (_sizeLock)
+            {
+                originalSizeChangePending = _sizeChangePending;
+                _sizeChangePending = false;
+            }
+
+            int[] supportedSizes = [640, 512, 416, 320, 256, 160];
+            int[] sizes = IsDynamicModel
+                ? supportedSizes
+                    .OrderBy(size => size == originalImageSize ? 0 : 1)
+                    .ThenByDescending(size => size)
+                    .ToArray()
+                : [ModelFixedSize];
+
+            var results = new List<PerformanceBenchmarkSizeResult>(sizes.Length);
+            _benchmarkMode = true;
+            _suppressOutputActions = true;
+            bool gateEntered = false;
+            Exception? benchmarkException = null;
+            Exception? restoreException = null;
+
+            try
+            {
+                await Task.Delay(80, cancellationToken);
+                await _inferenceGate.WaitAsync(cancellationToken);
+                gateEntered = true;
+                ResetStickyAimState();
+
+                for (int i = 0; i < sizes.Length; i++)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    int size = sizes[i];
+
+                    progress?.Report(new PerformanceBenchmarkProgress(
+                        i + 1,
+                        sizes.Length,
+                        size,
+                        $"Preparing {size}px model"));
+
+                    ConfigureBenchmarkImageSize(size);
+                    if (i > 0 || size != originalImageSize)
+                    {
+                        ReloadBenchmarkModelSession(originalSession);
+                    }
+
+                    progress?.Report(new PerformanceBenchmarkProgress(
+                        i + 1,
+                        sizes.Length,
+                        size,
+                        $"Warming up {size}px"));
+
+                    await RunBenchmarkWarmupAsync(
+                        cancellationToken,
+                        progress,
+                        i + 1,
+                        sizes.Length,
+                        size);
+
+                    progress?.Report(new PerformanceBenchmarkProgress(
+                        i + 1,
+                        sizes.Length,
+                        size,
+                        $"Testing {size}px"));
+
+                    PerformanceBenchmarkSizeResult result = await RunBenchmarkSampleAsync(
+                        BenchmarkSampleDuration,
+                        true,
+                        cancellationToken,
+                        progress,
+                        i + 1,
+                        sizes.Length,
+                        size,
+                        "Testing");
+
+                    results.Add(result);
+                }
+            }
+            catch (Exception ex)
+            {
+                benchmarkException = ex;
+            }
+            finally
+            {
+                try
+                {
+                    if (gateEntered)
+                    {
+                        RestoreBenchmarkState(
+                            originalImageSize,
+                            originalDetections,
+                            originalSession,
+                            originalOutputNames,
+                            originalUsingDirectML);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    restoreException = ex;
+                    Log(LogLevel.Error, $"Performance helper could not restore the model session: {ex.Message}", true, 5000);
+                }
+                finally
+                {
+                    ResetStickyAimState();
+                    _suppressOutputActions = false;
+                    _benchmarkMode = false;
+
+                    if (gateEntered)
+                    {
+                        _inferenceGate.Release();
+                    }
+
+                    lock (_sizeLock)
+                    {
+                        _sizeChangePending = _sizeChangePending || originalSizeChangePending;
+                    }
+                }
+            }
+
+            ThrowIfBenchmarkFailed(benchmarkException, restoreException);
+
+            var recommendations = PerformanceRecommendationBuilder.BuildChoices(
+                results,
+                originalImageSize,
+                !IsDynamicModel,
+                goal);
+            var recommendation = recommendations.Primary;
+
+            progress?.Report(new PerformanceBenchmarkProgress(
+                sizes.Length,
+                sizes.Length,
+                recommendation.SuggestedImageSize,
+                "Complete"));
+
+            return new PerformanceBenchmarkReport(results, recommendation, !IsDynamicModel, recommendations, goal);
+        }
+
+        private static void ThrowIfBenchmarkFailed(Exception? benchmarkException, Exception? restoreException)
+        {
+            if (restoreException != null)
+            {
+                throw new InvalidOperationException(
+                    "Performance helper could not restore the model session. Reload the model before applying settings.",
+                    restoreException);
+            }
+
+            if (benchmarkException != null)
+            {
+                ExceptionDispatchInfo.Capture(benchmarkException).Throw();
+            }
+        }
+
+        private async Task RunBenchmarkWarmupAsync(
+            CancellationToken cancellationToken,
+            IProgress<PerformanceBenchmarkProgress>? progress,
+            int stepIndex,
+            int totalSteps,
+            int imageSize)
+        {
+            var warmupStopwatch = Stopwatch.StartNew();
+            var progressStopwatch = Stopwatch.StartNew();
+            var recentFrameTimes = new Queue<double>(BenchmarkStabilityWindow);
+            int inferenceCount = 0;
+
+            while (warmupStopwatch.Elapsed < BenchmarkWarmupMaximumDuration)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                var frameStopwatch = Stopwatch.StartNew();
+                await GetClosestPrediction(useMousePosition: false);
+                frameStopwatch.Stop();
+
+                if (_lastPredictionRanInference)
+                {
+                    inferenceCount++;
+                    recentFrameTimes.Enqueue(frameStopwatch.Elapsed.TotalMilliseconds);
+                    if (recentFrameTimes.Count > BenchmarkStabilityWindow)
+                    {
+                        recentFrameTimes.Dequeue();
+                    }
+                }
+
+                if (progress != null && progressStopwatch.ElapsedMilliseconds >= 250)
+                {
+                    double requiredProgress = Math.Min(
+                        warmupStopwatch.Elapsed.TotalMilliseconds / BenchmarkWarmupMinimumDuration.TotalMilliseconds,
+                        inferenceCount / (double)BenchmarkWarmupMinimumInferences);
+                    double maxProgress = warmupStopwatch.Elapsed.TotalMilliseconds / BenchmarkWarmupMaximumDuration.TotalMilliseconds;
+                    int secondsLeft = Math.Max(0, (int)Math.Ceiling((BenchmarkWarmupMinimumDuration - warmupStopwatch.Elapsed).TotalSeconds));
+
+                    progress.Report(new PerformanceBenchmarkProgress(
+                        stepIndex,
+                        totalSteps,
+                        imageSize,
+                        $"Warming up {imageSize}px ({secondsLeft}s minimum, {inferenceCount} frames)",
+                        Math.Clamp(Math.Max(requiredProgress, maxProgress), 0, 1)));
+                    progressStopwatch.Restart();
+                }
+
+                if (warmupStopwatch.Elapsed >= BenchmarkWarmupMinimumDuration &&
+                    inferenceCount >= BenchmarkWarmupMinimumInferences &&
+                    IsBenchmarkWarmupStable(recentFrameTimes))
+                {
+                    break;
+                }
+            }
+        }
+
+        private static bool IsBenchmarkWarmupStable(IReadOnlyCollection<double> recentFrameTimes)
+        {
+            if (recentFrameTimes.Count < BenchmarkStabilityWindow)
+                return false;
+
+            double average = recentFrameTimes.Average();
+            double max = recentFrameTimes.Max();
+            return max <= Math.Max(100, average * 2.5);
+        }
+
+        private void ConfigureBenchmarkImageSize(int imageSize)
+        {
+            _currentImageSize = imageSize;
+            NUM_DETECTIONS = CalculateNumDetections(imageSize);
+            _bitmapBuffer = new byte[3 * imageSize * imageSize];
+            _reusableInputArray = null;
+            _reusableTensor = null;
+            _reusableInputs = null;
+        }
+
+        private void RestoreBenchmarkState(
+            int originalImageSize,
+            int originalDetections,
+            InferenceSession? originalSession,
+            List<string>? originalOutputNames,
+            bool originalUsingDirectML)
+        {
+            InferenceSession? benchmarkSession = _onnxModel;
+            ConfigureBenchmarkImageSize(originalImageSize);
+            _onnxModel = originalSession;
+            _outputNames = originalOutputNames;
+            _usingDirectML = originalUsingDirectML;
+            NUM_DETECTIONS = originalDetections;
+
+            if (!ReferenceEquals(benchmarkSession, originalSession))
+            {
+                benchmarkSession?.Dispose();
+            }
+
+            if (_onnxModel == null || _outputNames == null)
+            {
+                throw new InvalidOperationException("Original model session was unavailable after benchmark.");
+            }
+        }
+
+        private void ReloadBenchmarkModelSession(InferenceSession? preservedSession)
+        {
+            InferenceSession? previousSession = _onnxModel;
+            OnnxModelLoadResult loadedModel = OnnxModelSessionFactory.Load(_modelPath, _usingDirectML);
+            _onnxModel = loadedModel.Session;
+            _outputNames = loadedModel.OutputNames;
+
+            if (!ReferenceEquals(previousSession, preservedSession))
+            {
+                previousSession?.Dispose();
+            }
+        }
+
+        private async Task<PerformanceBenchmarkSizeResult> RunBenchmarkSampleAsync(
+            TimeSpan duration,
+            bool collectMetrics,
+            CancellationToken cancellationToken,
+            IProgress<PerformanceBenchmarkProgress>? progress = null,
+            int stepIndex = 0,
+            int totalSteps = 0,
+            int imageSize = 0,
+            string phase = "")
+        {
+            using var sampler = new ResourceUsageSampler();
+            var sampleStopwatch = Stopwatch.StartNew();
+            var peakWindowStopwatch = Stopwatch.StartNew();
+            var progressStopwatch = Stopwatch.StartNew();
+            int frameCount = 0;
+            int peakWindowFrameCount = 0;
+            double maxFps = 0;
+
+            if (collectMetrics)
+            {
+                sampler.Start();
+            }
+
+            while (sampleStopwatch.Elapsed < duration)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var frameStopwatch = Stopwatch.StartNew();
+                await GetClosestPrediction(useMousePosition: false);
+                frameStopwatch.Stop();
+                bool ranInference = _lastPredictionRanInference;
+
+                if (progress != null &&
+                    progressStopwatch.ElapsedMilliseconds >= 250 &&
+                    totalSteps > 0)
+                {
+                    double stepProgress = Math.Clamp(sampleStopwatch.Elapsed.TotalMilliseconds / duration.TotalMilliseconds, 0, 1);
+                    int secondsLeft = Math.Max(0, (int)Math.Ceiling((duration - sampleStopwatch.Elapsed).TotalSeconds));
+                    progress.Report(new PerformanceBenchmarkProgress(
+                        stepIndex,
+                        totalSteps,
+                        imageSize,
+                        $"{phase} {imageSize}px ({secondsLeft}s left)",
+                        stepProgress));
+                    progressStopwatch.Restart();
+                }
+
+                if (!collectMetrics)
+                    continue;
+
+                if (!ranInference)
+                    continue;
+
+                frameCount++;
+                peakWindowFrameCount++;
+
+                if (peakWindowStopwatch.ElapsedMilliseconds >= 500)
+                {
+                    maxFps = Math.Max(maxFps, peakWindowFrameCount / peakWindowStopwatch.Elapsed.TotalSeconds);
+                    peakWindowFrameCount = 0;
+                    peakWindowStopwatch.Restart();
+                }
+            }
+
+            if (!collectMetrics)
+            {
+                return new PerformanceBenchmarkSizeResult(
+                    IMAGE_SIZE,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    false,
+                    0);
+            }
+
+            TimeSpan sampleElapsed = sampleStopwatch.Elapsed;
+            TimeSpan peakWindowElapsed = peakWindowStopwatch.Elapsed;
+            sampleStopwatch.Stop();
+            peakWindowStopwatch.Stop();
+
+            ResourceUsageSummary resourceUsage = await sampler.FinishAsync();
+            double averageFps = CalculateBenchmarkAverageFps(frameCount, sampleElapsed);
+            if (peakWindowFrameCount > 0 && peakWindowElapsed.TotalSeconds > 0)
+            {
+                maxFps = Math.Max(maxFps, peakWindowFrameCount / peakWindowElapsed.TotalSeconds);
+            }
+
+            return new PerformanceBenchmarkSizeResult(
+                IMAGE_SIZE,
+                averageFps,
+                Math.Max(maxFps, averageFps),
+                resourceUsage.AverageCpuPercent,
+                resourceUsage.PeakCpuPercent,
+                resourceUsage.AverageGpuPercent,
+                resourceUsage.PeakGpuPercent,
+                resourceUsage.GpuAvailable,
+                frameCount);
+        }
+
+        internal static double CalculateBenchmarkAverageFps(int frameCount, TimeSpan sampleElapsed)
+        {
+            return sampleElapsed.TotalSeconds > 0
+                ? frameCount / sampleElapsed.TotalSeconds
+                : 0;
+        }
+
+        #endregion AI FPS Limit + Performance Helper
     }
     public class Prediction
     {

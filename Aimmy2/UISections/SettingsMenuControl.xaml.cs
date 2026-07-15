@@ -224,6 +224,14 @@ namespace Aimmy2.Controls
                         }
                     };
                 }, tooltip: "Resolution the AI uses for detection. Smaller = faster but less accurate.")
+                .AddSlider("AI FPS Limit", "FPS", 5, 5, 0, 240, s =>
+                {
+                    uiManager.S_AIFpsLimit = s;
+                }, tooltip: "Caps the AI loop to reduce CPU/GPU load. 0 keeps Aimmy running at full speed.")
+                .AddButton("Run Performance Helper", b =>
+                {
+                    b.Reader.Click += (s, e) => _mainWindow!.ShowPerformanceHelper();
+                }, tooltip: "Open the performance helper again for the currently loaded model.")
                 .AddDropdown("Target Class", d =>
                 {
                     d.DropdownBox.SelectedIndex = 0;

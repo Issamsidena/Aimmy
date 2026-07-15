@@ -116,6 +116,19 @@ namespace InputLogic
             LastClickTime = DateTime.UtcNow;
         }
 
+        // Single synthetic click for Rapid Fire. Registers the echo so the global hook ignores
+        // the click coming back through it (important when the keybind is the Left mouse button).
+        public static async Task DoRapidFireClick(int clickHoldMilliseconds = 10)
+        {
+            var (mouseDown, mouseUp) = GetMouseActions();
+
+            InputBindingManager.RegisterInjectedClick("Left");
+
+            mouseDown.Invoke();
+            await Task.Delay(clickHoldMilliseconds);
+            mouseUp.Invoke();
+        }
+
         #region Spray Mode Methods
         public static void HoldMouseButton()
         {
@@ -143,6 +156,21 @@ namespace InputLogic
             }
         }
         #endregion
+
+        // Mouse Curve multiplier applied to the per-tick aim movement.
+        private static double GetMouseCurveFactor()
+        {
+            if (Dictionary.dropdownState.TryGetValue("Mouse Curve", out var v))
+            {
+                switch (v?.ToString())
+                {
+                    case "Smooth/Legit": return 0.6;
+                    case "Aggressive": return 1.6;
+                    case "Linear": return 1.0;
+                }
+            }
+            return 1.0;
+        }
 
         public static void MoveCrosshair(int detectedX, int detectedY)
         {
@@ -173,22 +201,43 @@ namespace InputLogic
                         break;
                     }
                 // "Cubic Bezier" mirrors legacy v2.5.5 — math only, EMA applied below by MoveCrosshair.
+                // "Curve Strength" bows the control points perpendicular to the line. Default 0 keeps
+                // them collinear, reproducing the original straight bezier exactly.
                 case "Cubic Bezier":
-                    Point control1 = new Point(start.X + (end.X - start.X) / 3, start.Y + (end.Y - start.Y) / 3);
-                    Point control2 = new Point(start.X + 2 * (end.X - start.X) / 3, start.Y + 2 * (end.Y - start.Y) / 3);
-                    newPosition = MovementPaths.CubicBezierLegacy(start, end, control1, control2, 1 - Dictionary.sliderSettings["Mouse Sensitivity (+/-)"]);
-                    break;
-                case "Linear":
+                    {
+                        Point control1 = new Point(start.X + (end.X - start.X) / 3, start.Y + (end.Y - start.Y) / 3);
+                        Point control2 = new Point(start.X + 2 * (end.X - start.X) / 3, start.Y + 2 * (end.Y - start.Y) / 3);
+                        double curveStrength = (double)Dictionary.sliderSettings["Curve Strength"];
+                        if (curveStrength != 0)
+                        {
+                            double perpX = -(end.Y - start.Y);
+                            double perpY = end.X - start.X;
+                            double perpLen = Math.Sqrt(perpX * perpX + perpY * perpY);
+                            if (perpLen > 0)
+                            {
+                                perpX /= perpLen;
+                                perpY /= perpLen;
+                                control1 = new Point(control1.X + (int)(perpX * curveStrength), control1.Y + (int)(perpY * curveStrength));
+                                control2 = new Point(control2.X + (int)(perpX * curveStrength), control2.Y + (int)(perpY * curveStrength));
+                            }
+                        }
+                        newPosition = MovementPaths.CubicBezierLegacy(start, end, control1, control2, 1 - Dictionary.sliderSettings["Mouse Sensitivity (+/-)"]);
+                        break;
+                    }
+                case "Straight":
                     newPosition = MovementPaths.Lerp(start, end, 1 - Dictionary.sliderSettings["Mouse Sensitivity (+/-)"]);
                     break;
+                case "Smoothstep":
+                    newPosition = MovementPaths.Smoothstep(start, end, 1 - Dictionary.sliderSettings["Mouse Sensitivity (+/-)"]);
+                    break;
                 case "Exponential":
-                    newPosition = MovementPaths.Exponential(start, end, 1 - (Dictionary.sliderSettings["Mouse Sensitivity (+/-)"] - 0.2), 3.0);
+                    newPosition = MovementPaths.Exponential(start, end, 1 - (Dictionary.sliderSettings["Mouse Sensitivity (+/-)"] - 0.2), (double)Dictionary.sliderSettings["Exponent Strength"]);
                     break;
                 case "Adaptive":
-                    newPosition = MovementPaths.Adaptive(start, end, 1 - Dictionary.sliderSettings["Mouse Sensitivity (+/-)"]);
+                    newPosition = MovementPaths.Adaptive(start, end, 1 - Dictionary.sliderSettings["Mouse Sensitivity (+/-)"], (double)Dictionary.sliderSettings["Adaptation Strength"]);
                     break;
                 case "Perlin Noise":
-                    newPosition = MovementPaths.PerlinNoise(start, end, 1 - Dictionary.sliderSettings["Mouse Sensitivity (+/-)"], 20, 0.5);
+                    newPosition = MovementPaths.PerlinNoise(start, end, 1 - Dictionary.sliderSettings["Mouse Sensitivity (+/-)"], (double)Dictionary.sliderSettings["Noise Level"], 0.5);
                     break;
                 default:
                     newPosition = MovementPaths.Lerp(start, end, 1 - Dictionary.sliderSettings["Mouse Sensitivity (+/-)"]);
@@ -202,6 +251,11 @@ namespace InputLogic
                 newPosition.X = (int)EmaSmoothing(previousX, newPosition.X, smoothingFactor);
                 newPosition.Y = (int)EmaSmoothing(previousY, newPosition.Y, smoothingFactor);
             }
+
+            // Mouse Curve response: scale the per-tick movement (Smooth/Legit slower, Aggressive faster).
+            double mouseCurveFactor = GetMouseCurveFactor();
+            newPosition.X = (int)(newPosition.X * mouseCurveFactor);
+            newPosition.Y = (int)(newPosition.Y * mouseCurveFactor);
 
             newPosition.X = Math.Clamp(newPosition.X, -150, 150);
             newPosition.Y = Math.Clamp(newPosition.Y, -150, 150);
@@ -346,6 +400,20 @@ namespace InputLogic
 
                 xPerSecond = xPerSecond * fadeX + driftBoostX * timing;
                 yPerSecond = yPerSecond * fadeY + driftBoostY * timing;
+            }
+
+            // Anti Recoil Timeout: stop compensating on an axis once it has been recoiling for
+            // longer than the per-axis timeout (in seconds). 0 = no timeout (compensate forever).
+            if (Dictionary.toggleState.TryGetValue("Anti Recoil Timeout", out var timeoutObj)
+                && timeoutObj is true)
+            {
+                double timeoutY = Dictionary.sliderSettings.TryGetValue("Timeout Y", out var ty)
+                    ? Convert.ToDouble(ty) : 0.0;
+                double timeoutX = Dictionary.sliderSettings.TryGetValue("Timeout X", out var tx)
+                    ? Convert.ToDouble(tx) : 0.0;
+
+                if (timeoutY > 0 && sustainedAfterDelaySec >= timeoutY) yPerSecond = 0;
+                if (timeoutX > 0 && sustainedAfterDelaySec >= timeoutX) xPerSecond = 0;
             }
 
             AccumulateAntiRecoilPixels(xPerSecond, yPerSecond, dtSeconds, out int xRecoil, out int yRecoil);
