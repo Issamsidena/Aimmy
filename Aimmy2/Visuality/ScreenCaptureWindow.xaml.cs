@@ -4,6 +4,7 @@ using System.Drawing;
 using System.Drawing.Imaging;
 using System.IO;
 using System.Windows;
+using System.Windows.Input;
 using System.Windows.Media.Imaging;
 
 namespace Visuality
@@ -11,6 +12,7 @@ namespace Visuality
     /// <summary>
     /// Debug preview that mirrors exactly what the AI captures (the model's input region),
     /// driven by the frames grabbed inside AIManager. Toggled by "Show Screen Capture".
+    /// Uses Aimmy's custom title bar.
     /// </summary>
     public partial class ScreenCaptureWindow : Window
     {
@@ -36,7 +38,7 @@ namespace Visuality
                 if (owner != null)
                     _instance.Owner = owner;
 
-                // Closing via the X hides the window and notifies the caller so the toggle can sync off.
+                // Closing hides the window and notifies the caller so the toggle can sync off.
                 _instance.Closing += (s, e) =>
                 {
                     e.Cancel = true;
@@ -101,5 +103,9 @@ namespace Visuality
             img.Freeze(); // frozen => safe to hand to the UI thread
             return img;
         }
+
+        private void Border_MouseLeftButtonDown(object sender, MouseButtonEventArgs e) => DragMove();
+
+        private void Exit_Click(object sender, RoutedEventArgs e) => Close();
     }
 }
