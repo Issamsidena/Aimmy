@@ -227,6 +227,7 @@ namespace Aimmy2.Controls
                 .AddSlider("AI FPS Limit", "FPS", 5, 5, 0, 240, s =>
                 {
                     uiManager.S_AIFpsLimit = s;
+                    s.SetValueFormatter(value => value <= 0 ? "Unlimited" : $"{value:F0} FPS");
                 }, tooltip: "Caps the AI loop to reduce CPU/GPU load. 0 keeps Aimmy running at full speed.")
                 .AddButton("Run Performance Helper", b =>
                 {

@@ -11,6 +11,7 @@ namespace Aimmy2.UILibrary
     {
         private readonly string _notifierText;
         private int _decimalPlaces = 2;
+        private Func<double, string>? _valueFormatter;
 
         /// <summary>
         /// Number of decimal places shown in the value notifier (defaults to 2, e.g. "0.00").
@@ -54,9 +55,20 @@ namespace Aimmy2.UILibrary
             };
         }
 
+        /// <summary>
+        /// Overrides how the value notifier text is rendered (e.g. "Unlimited" at 0, "5 FPS" otherwise).
+        /// When set, it takes precedence over <see cref="DecimalPlaces"/>.
+        /// </summary>
+        public void SetValueFormatter(Func<double, string> valueFormatter)
+        {
+            _valueFormatter = valueFormatter;
+            UpdateNotifier();
+        }
+
         private void UpdateNotifier()
         {
-            AdjustNotifier.Content = $"{Slider.Value.ToString("F" + _decimalPlaces)} {_notifierText}";
+            AdjustNotifier.Content = _valueFormatter?.Invoke(Slider.Value)
+                ?? $"{Slider.Value.ToString("F" + _decimalPlaces)} {_notifierText}";
         }
 
         private void UpdateSliderValue(double change)
