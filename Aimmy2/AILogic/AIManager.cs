@@ -592,12 +592,14 @@ namespace Aimmy2.AILogic
                             else
                             {
                                 // Processing so we are at the ready but not holding right/click.
+                                if (Dictionary.toggleState["Show Screen Capture"]) CapturePreviewFrame();
                                 await Task.Delay(1);
                             }
                         }
                         else
                         {
                             // No work to do—sleep briefly to free up CPU
+                            if (Dictionary.toggleState["Show Screen Capture"]) CapturePreviewFrame();
                             await Task.Delay(1);
                         }
                     }
@@ -996,6 +998,47 @@ namespace Aimmy2.AILogic
 
                     MouseManager.MoveCrosshair(blendedX, blendedY);
                     break;
+            }
+        }
+
+        // Grabs the same region the model would see (WITHOUT running inference) and mirrors it into
+        // the "Show Screen Capture" preview, so the preview stays live even when not actively aiming.
+        private void CapturePreviewFrame()
+        {
+            try
+            {
+                int previewX, previewY;
+                if (Dictionary.dropdownState["Detection Area Type"] == "Closest to Mouse")
+                {
+                    var mousePos = WinAPICaller.GetCursorPosition();
+                    if (DisplayManager.IsPointInCurrentDisplay(new System.Windows.Point(mousePos.X, mousePos.Y)))
+                    {
+                        previewX = mousePos.X;
+                        previewY = mousePos.Y;
+                    }
+                    else
+                    {
+                        previewX = DisplayManager.ScreenLeft + (DisplayManager.ScreenWidth / 2);
+                        previewY = DisplayManager.ScreenTop + (DisplayManager.ScreenHeight / 2);
+                    }
+                }
+                else
+                {
+                    previewX = DisplayManager.ScreenLeft + (DisplayManager.ScreenWidth / 2);
+                    previewY = DisplayManager.ScreenTop + (DisplayManager.ScreenHeight / 2);
+                }
+
+                Rectangle previewBox = new(previewX - IMAGE_SIZE / 2, previewY - IMAGE_SIZE / 2, IMAGE_SIZE, IMAGE_SIZE);
+                Bitmap? previewFrame = _captureManager.ScreenGrab(previewBox);
+                if (previewFrame != null)
+                {
+                    ScreenCaptureWindow.PushFrame(previewFrame);
+                    previewFrame.Dispose();
+                }
+            }
+            catch
+            {
+                // Preview is best-effort; never let it disrupt the AI loop.
             }
         }
 
