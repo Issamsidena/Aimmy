@@ -1043,6 +1043,12 @@ namespace Aimmy2.AILogic
 
             if (frame == null) return null;
 
+            // "Show Screen Capture": mirror exactly what the AI sees into the preview window.
+            if (Dictionary.toggleState["Show Screen Capture"])
+            {
+                ScreenCaptureWindow.PushFrame(frame);
+            }
+
             IDisposableReadOnlyCollection<DisposableNamedOnnxValue>? results = null;
             Tensor<float>? outputTensor = null;
 

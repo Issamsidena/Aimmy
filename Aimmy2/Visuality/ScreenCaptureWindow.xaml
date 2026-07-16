@@ -1,0 +1,31 @@
+<Window x:Class="Visuality.ScreenCaptureWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Screen Capture (AI View)"
+        Width="340"
+        Height="380"
+        Background="#0B0B0B"
+        WindowStartupLocation="CenterScreen"
+        ShowInTaskbar="True">
+    <Grid>
+        <Image x:Name="CaptureImage"
+               Stretch="Uniform"
+               RenderOptions.BitmapScalingMode="NearestNeighbor"/>
+        <TextBlock x:Name="EmptyHint"
+                   Text="Waiting for capture… (aim/detection must be active)"
+                   Foreground="#888888"
+                   TextWrapping="Wrap"
+                   TextAlignment="Center"
+                   HorizontalAlignment="Center"
+                   VerticalAlignment="Center"
+                   Margin="16"/>
+        <TextBlock x:Name="FpsText"
+                   Text="FPS: 0"
+                   Foreground="#FF3B30"
+                   FontWeight="Bold"
+                   FontSize="18"
+                   HorizontalAlignment="Left"
+                   VerticalAlignment="Top"
+                   Margin="8"/>
+    </Grid>
+</Window>

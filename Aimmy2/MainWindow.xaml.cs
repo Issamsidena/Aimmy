@@ -748,6 +748,33 @@ namespace Aimmy2
                 {
                     StreamGuardManager.ApplyStreamGuardToAllWindows(Dictionary.toggleState[title]);
                 },
+                ["Show Screen Capture"] = () =>
+                {
+                    if (Dictionary.toggleState["Show Screen Capture"])
+                    {
+                        // Require a loaded model before showing the AI's screen capture.
+                        if (FileManager.AIManager == null || Dictionary.lastLoadedModel == "N/A")
+                        {
+                            LogManager.Log(LogManager.LogLevel.Warning, "Load a model first before turning on Show Screen Capture.", true, 3000);
+                            Dictionary.toggleState["Show Screen Capture"] = false;
+                            if (uiManager.T_ShowScreenCapture != null)
+                                UpdateToggleUI(uiManager.T_ShowScreenCapture, false);
+                            return;
+                        }
+
+                        ScreenCaptureWindow.ShowWindow(this, () =>
+                        {
+                            // User closed the preview window — keep the toggle in sync.
+                            Dictionary.toggleState["Show Screen Capture"] = false;
+                            if (uiManager.T_ShowScreenCapture != null)
+                                UpdateToggleUI(uiManager.T_ShowScreenCapture, false);
+                        });
+                    }
+                    else
+                    {
+                        ScreenCaptureWindow.HideWindow();
+                    }
+                },
                 ["EMA Smoothening"] = () =>
                 {
                     MouseManager.IsEMASmoothingEnabled = Dictionary.toggleState[title];
