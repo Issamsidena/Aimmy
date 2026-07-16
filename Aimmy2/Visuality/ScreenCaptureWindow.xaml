@@ -78,7 +78,7 @@
                            FontSize="18"
                            HorizontalAlignment="Left"
                            VerticalAlignment="Top"
-                           Margin="6,36,6,6" />
+                           Margin="6,10,6,6" />
             </Grid>
         </Grid>
     </Border>
