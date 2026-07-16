@@ -101,7 +101,7 @@ namespace Aimmy2.Class
             { "UI TopMost", false },
             //--
             { "StreamGuard", false },
-            { "Show Capture", false },
+            { "Show Screen Capture", false },
             //--
             { "X Axis Percentage Adjustment", false },
             { "Y Axis Percentage Adjustment", false }

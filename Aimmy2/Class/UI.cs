@@ -157,7 +157,7 @@ namespace Class
         public APButton? B_Debug { get; set; }
         //--
         public AToggle? T_StreamGuard { get; set; }
-        public AToggle? T_ShowCapture { get; set; }
+        public AToggle? T_ShowScreenCapture { get; set; }
         //--
 
         // X/Y Percentage Adjustment (in Aim Config)
