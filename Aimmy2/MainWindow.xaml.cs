@@ -1169,6 +1169,14 @@ namespace Aimmy2
                     ["Top"] = 1,
                     ["Bottom"] = 2
                 }),
+                (uiManager.D_AimBone, "Aim Bone", new Dictionary<string, int>
+                {
+                    ["Head"] = 0,
+                    ["Neck"] = 1,
+                    ["Torso"] = 2,
+                    ["Leg"] = 3,
+                    ["Custom Offsets"] = 4
+                }),
                 // SettingsMenu dropdowns
                 (uiManager.D_MouseMovementMethod, "Mouse Movement Method", new Dictionary<string, int>
                 {
@@ -1262,6 +1270,7 @@ namespace Aimmy2
             {
                 ("FOV Size", uiManager.S_FOVSize, 640.0),
                 ("Mouse Sensitivity (+/-)", uiManager.S_MouseSensitivity, 0.8),
+                ("Aim Strength", uiManager.S_AimStrength, 0.0),
                 ("Mouse Jitter", uiManager.S_MouseJitter, 0.0),
                 ("Sticky Aim Threshold", uiManager.S_StickyAimThreshold, 50),
                 ("Approach Speed", uiManager.S_ApproachSpeed, 0.6),
@@ -1307,6 +1316,15 @@ namespace Aimmy2
                     ["Center"] = 0,
                     ["Top"] = 1,
                     ["Bottom"] = 2
+                }),
+
+                ("Aim Bone", uiManager.D_AimBone, new Dictionary<string, int>
+                {
+                    ["Head"] = 0,
+                    ["Neck"] = 1,
+                    ["Torso"] = 2,
+                    ["Leg"] = 3,
+                    ["Custom Offsets"] = 4
                 }),
 
                 ("Mouse Movement Method", uiManager.D_MouseMovementMethod, new Dictionary<string, int>

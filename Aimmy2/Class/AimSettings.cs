@@ -20,6 +20,7 @@ namespace Aimmy2.Class
         public static string TargetClass => GetDropdown("Target Class");
         public static string PredictionMethod => GetDropdown("Prediction Method");
         public static string AimingBoundariesAlignment => GetDropdown("Aiming Boundaries Alignment");
+        public static string AimBone => GetDropdown("Aim Bone");
         public static string TracerPosition => GetDropdown("Tracer Position");
         public static string MovementPath => GetDropdown("Movement Path");
         public static string MouseMovementMethod => GetDropdown("Mouse Movement Method");
@@ -35,6 +36,7 @@ namespace Aimmy2.Class
         public static int AutoTriggerDelayMilliseconds => (int)(GetSlider("Auto Trigger Delay") * 1000);
         public static int MouseJitter => (int)GetSlider("Mouse Jitter");
         public static double MouseSensitivity => GetSlider("Mouse Sensitivity (+/-)");
+        public static double AimStrength => Math.Clamp(GetSlider("Aim Strength") / 100.0, 0.0, 1.0);
         public static double KalmanLeadTime => GetSlider("Kalman Lead Time");
         public static double WiseTheFoxLeadTime => GetSlider("WiseTheFox Lead Time");
         public static double ShalloeLeadMultiplier => GetSlider("Shalloe Lead Multiplier");

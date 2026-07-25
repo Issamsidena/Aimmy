@@ -389,7 +389,18 @@ namespace Aimmy2.Controls
                     _mainWindow.AddDropdownItem(d, "Closest Crosshair");
                     d.DropdownBox.SelectedIndex = 0;
                     Dictionary.dropdownState["Target Priority"] = "Best Confidence";
-                }, tooltip: "Best Confidence = highest AI score. Closest Distance = larger box first (near/big enemy before far/small). Closest Crosshair = the enemy nearest your crosshair wins. Best Confidence is usually best and reduces false positives.");
+                }, tooltip: "Best Confidence = highest AI score. Closest Distance = larger box first (near/big enemy before far/small). Closest Crosshair = the enemy nearest your crosshair wins. Best Confidence is usually best and reduces false positives.")
+                .AddDropdown("Aim Bone", d =>
+                {
+                    uiManager.D_AimBone = d;
+                    _mainWindow.AddDropdownItem(d, "Head");
+                    _mainWindow.AddDropdownItem(d, "Neck");
+                    _mainWindow.AddDropdownItem(d, "Torso");
+                    _mainWindow.AddDropdownItem(d, "Leg");
+                    _mainWindow.AddDropdownItem(d, "Custom Offsets");
+                    d.DropdownBox.SelectedIndex = 4;
+                    Dictionary.dropdownState["Aim Bone"] = "Custom Offsets";
+                }, tooltip: "Which body part to lock onto. Head/Neck/Torso/Leg aim at that part of the target box and keep tracking it as the target moves left/right. Custom Offsets uses Aiming Boundaries Alignment plus the manual X/Y Offset sliders instead.");
 
             // Add sliders with validation
             AddConfigSliders(builder, uiManager);
@@ -434,6 +445,8 @@ namespace Aimmy2.Controls
                                 "The Mouse Sensitivity you have set can cause Aimmy to be unstable to aim, please increase if you suffer from this problem", true);
                     };
                 }, tooltip: "How fast the aim moves. Lower = faster and snappier, higher = slower and smoother.")
+                .AddSlider("Aim Strength", "Strength", 1, 1, 0, 100, s => uiManager.S_AimStrength = s,
+                    tooltip: "How hard the aim LOCKS onto the target (not a speed setting). It plants on the target and holds, adding zero jitter of its own. 0 = normal aim, 50 = semi-instant lock, 100 = instant lock/snap. Works on top of your Sensitivity / Exponential / Smooth-Legit settings.")
                 .AddSlider("Mouse Jitter", "Jitter", 1, 1, 0, 15, s => uiManager.S_MouseJitter = s,
                     tooltip: "Adds random small movements to make aim look more human-like.")
                 .AddToggle("Snap Lock", t => uiManager.T_SnapLock = t,

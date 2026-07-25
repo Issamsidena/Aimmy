@@ -31,6 +31,9 @@ namespace Aimmy2.Class
             { "FOV Size", 640 },
             { "Dynamic FOV Size", 200 },
             { "Mouse Sensitivity (+/-)", 0.80 },
+            // Aim Strength: 0-100 blend of the per-tick step toward the full target.
+            // 0 = normal aim, 100 = instant lock/snap. Deterministic (adds no jitter of its own).
+            { "Aim Strength", 0 },
             { "Mouse Jitter", 4 },
             // Movement Path per-curve tuning. Defaults reproduce the old hardcoded behavior:
             { "Curve Strength", 0.0 },        // Cubic Bezier: 0 = collinear control points (original straight bow)
@@ -137,7 +140,11 @@ namespace Aimmy2.Class
             { "Mouse Curve", "Linear" },
             { "Image Size", "640" },
             { "Target Class", "Smart Detection" },
-            { "Target Priority", "Best Confidence" }
+            { "Target Priority", "Best Confidence" },
+            // Aim Bone: which body part to lock onto within the detection box. Bone presets aim at a
+            // fixed fraction of the box (recomputed each frame, so they track the part as it moves).
+            // "Custom Offsets" falls back to Aiming Boundaries Alignment + the manual X/Y offsets.
+            { "Aim Bone", "Custom Offsets" }
         };
 
         public static Dictionary<string, dynamic> colorState = new()

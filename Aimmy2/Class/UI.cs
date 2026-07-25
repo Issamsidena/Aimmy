@@ -38,7 +38,9 @@ namespace Class
         public ADropdown? D_AimingBoundariesAlignment { get; set; }
         public ADropdown? D_TargetClass { get; set; }
         public ADropdown? D_TargetPriority { get; set; }
+        public ADropdown? D_AimBone { get; set; }
         public ASlider? S_MouseSensitivity { get; set; }
+        public ASlider? S_AimStrength { get; set; }
         public ASlider? S_MouseJitter { get; set; }
         public ASlider? S_StickyAimThreshold { get; set; }
         public ASlider? S_YOffset { get; set; }

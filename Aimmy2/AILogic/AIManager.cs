@@ -821,6 +821,32 @@ namespace Aimmy2.AILogic
 
             var rect = closestPrediction.Rectangle;
 
+            // Aim Bone: lock onto a specific body part inside the detection box. The aim point is a
+            // fraction of the box height (from the top) with X at the box's horizontal center, and it
+            // is recomputed every frame -- so as the target (and your view) moves left/right the point
+            // stays on that part instead of drifting off the head into the wider body box. Because the
+            // point scales with the box, the lock holds at any distance. "Custom Offsets" opts out and
+            // uses the classic Aiming Boundaries Alignment + manual X/Y offset behavior below.
+            string aimBone = Dictionary.dropdownState.TryGetValue("Aim Bone", out var boneObj)
+                ? boneObj?.ToString() ?? "Custom Offsets"
+                : "Custom Offsets";
+
+            if (aimBone != "Custom Offsets")
+            {
+                float boneYFraction = aimBone switch
+                {
+                    "Head" => 0.11f,
+                    "Neck" => 0.22f,
+                    "Torso" => 0.50f,
+                    "Leg" => 0.85f,
+                    _ => 0.50f
+                };
+
+                detectedX = (int)((rect.X + rect.Width / 2f) * scaleX);
+                detectedY = (int)((rect.Y + rect.Height * boneYFraction) * scaleY);
+                return;
+            }
+
             if (Dictionary.toggleState["X Axis Percentage Adjustment"])
             {
                 detectedX = (int)((rect.X + (rect.Width * (XOffsetPercentage / 100))) * scaleX);

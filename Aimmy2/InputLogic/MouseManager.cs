@@ -29,6 +29,11 @@ namespace InputLogic
         private static double _antiRecoilResidualX;
         private static double _antiRecoilResidualY;
 
+        // Aim Strength target low-pass state: the smoothed target the crosshair actually aims at.
+        private static double _smoothedTargetX;
+        private static double _smoothedTargetY;
+        private static bool _hasSmoothedTarget;
+
         [DllImport("user32.dll")]
         private static extern void mouse_event(uint dwFlags, uint dx, uint dy, uint dwData, int dwExtraInfo);
 
@@ -174,6 +179,52 @@ namespace InputLogic
 
         public static void MoveCrosshair(int detectedX, int detectedY)
         {
+            // Aim Strength: stabilize the TARGET before we aim at it, instead of touching the movement.
+            // Detection boxes wobble a few pixels every frame; that wobble is exactly what turns a fast
+            // (low-Sensitivity) aim into jitter. Low-pass the target so the crosshair locks onto a steady
+            // point -- so you can push Sensitivity fast for an "instant" feel and this cancels the jitter
+            // that speed would normally cause. Speed/feel stay owned by Sensitivity / Mouse Curve /
+            // Movement Path (they still fully apply). 0 = off (raw target, original behavior).
+            double aimStrength = AimSettings.AimStrength;
+            if (aimStrength > 0)
+            {
+                if (!_hasSmoothedTarget)
+                {
+                    _smoothedTargetX = detectedX;
+                    _smoothedTargetY = detectedY;
+                    _hasSmoothedTarget = true;
+                }
+                else
+                {
+                    double jump = Math.Sqrt(
+                        Math.Pow(detectedX - _smoothedTargetX, 2) +
+                        Math.Pow(detectedY - _smoothedTargetY, 2));
+
+                    if (jump > 200.0)
+                    {
+                        // Big jump = a new/different target: snap the filter straight there so it does
+                        // not crawl across the screen from the last target's position.
+                        _smoothedTargetX = detectedX;
+                        _smoothedTargetY = detectedY;
+                    }
+                    else
+                    {
+                        // alpha = how much of the raw detection is folded in each frame. Higher strength
+                        // -> lower alpha -> heavier smoothing -> steadier lock (slightly more lag).
+                        double alpha = 1.0 - aimStrength * 0.85; // strength 1.0 -> 0.15, strength 0.5 -> 0.575
+                        _smoothedTargetX += (detectedX - _smoothedTargetX) * alpha;
+                        _smoothedTargetY += (detectedY - _smoothedTargetY) * alpha;
+                    }
+                }
+
+                detectedX = (int)Math.Round(_smoothedTargetX);
+                detectedY = (int)Math.Round(_smoothedTargetY);
+            }
+            else
+            {
+                _hasSmoothedTarget = false;
+            }
+
             int halfScreenWidth = (int)ScreenWidth / 2;
             int halfScreenHeight = (int)ScreenHeight / 2;
 
