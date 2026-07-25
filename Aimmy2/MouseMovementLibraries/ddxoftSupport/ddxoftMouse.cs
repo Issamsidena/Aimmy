@@ -1,4 +1,5 @@
-﻿using System.Runtime.InteropServices;
+﻿using Other;
+using System.Runtime.InteropServices;
 
 namespace MouseMovementLibraries.ddxoftSupport
 {
@@ -38,13 +39,37 @@ namespace MouseMovementLibraries.ddxoftSupport
 
         public delegate int pDD_todc(int vkcode);
 
-        public pDD_btn btn;         //Mouse button
-        public pDD_whl whl;         //Mouse wheel
-        public pDD_mov mov;      //Mouse move abs.
-        public pDD_movR movR;  //Mouse move rel.
-        public pDD_key key;         //Keyboard
-        public pDD_str str;            //Input visible char
-        public pDD_todc todc;      //VK to ddcode
+        // These stay bound to no-op stubs until the driver DLL loads, so callers (the AI loop included)
+        // get a single notification and a no-op instead of a NullReferenceException when it never does.
+        public pDD_btn btn = _ => DriverNotLoaded();         //Mouse button
+        public pDD_whl whl = _ => DriverNotLoaded();         //Mouse wheel
+        public pDD_mov mov = (_, _) => DriverNotLoaded();      //Mouse move abs.
+        public pDD_movR movR = (_, _) => DriverNotLoaded();  //Mouse move rel.
+        public pDD_key key = (_, _) => DriverNotLoaded();         //Keyboard
+        public pDD_str str = _ => DriverNotLoaded();            //Input visible char
+        public pDD_todc todc = _ => DriverNotLoaded();      //VK to ddcode
+
+        private static bool driverNotLoadedNotified = false;
+
+        // Returns 0, which is the driver's own "call failed" return value.
+        private static int DriverNotLoaded()
+        {
+            if (!driverNotLoadedNotified)
+            {
+                driverNotLoadedNotified = true;
+
+                try
+                {
+                    LogManager.Log(LogManager.LogLevel.Error, "The ddxoft virtual input driver is not loaded, mouse movement is disabled. Please try a different Mouse Movement Method.", true);
+                }
+                catch
+                {
+                    // Notifying is best effort, it must never throw back into the AI loop.
+                }
+            }
+
+            return 0;
+        }
 
         private IntPtr m_hinst;
 

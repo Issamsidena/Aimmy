@@ -35,6 +35,14 @@ namespace AILogic
         // Display change handling
         public readonly object _displayLock = new();
         public bool _displayChangesPending { get; set; } = false;
+        private int _displayChangeRetries = 0;
+        private DateTime _nextDisplayChangeRetry = DateTime.MinValue;
+        private const int MAX_DISPLAY_CHANGE_RETRIES = 3;
+        private static readonly TimeSpan _displayChangeRetryCooldown = TimeSpan.FromSeconds(2);
+
+        // One-shot notification flags (these paths run per frame, so they must not spam the UI thread)
+        private bool _initFailureNotified = false;
+        private bool _noVisibleRegionNotified = false;
 
         // Performance tracking
         private int _consecutiveFailures = 0;
@@ -59,6 +67,8 @@ namespace AILogic
             {
                 _displayChangesPending = true;
                 _consecutiveFailures = 0;
+                _displayChangeRetries = 0;
+                _nextDisplayChangeRetry = DateTime.MinValue;
                 DisposeDxgiResources();
             }
             LogManager.Log(LogLevel.Info, "Display change detected. DirectX resources will be reinitialized.");
@@ -68,16 +78,50 @@ namespace AILogic
         {
             lock (_displayLock)
             {
-                if (!_displayChangesPending) return;
+                TryReinitializeAfterDisplayChange();
+            }
+        }
 
-                try
+        /// <summary>
+        /// Re-creates the DXGI duplication after a display change. Must be called with <see cref="_displayLock"/> held.
+        /// The pending flag is always cleared so a persistent failure cannot re-run the full adapter/output
+        /// enumeration on every frame; repeated failures back off and finally degrade to GDI+.
+        /// </summary>
+        private void TryReinitializeAfterDisplayChange()
+        {
+            if (!_displayChangesPending) return;
+
+            if (_directXFailedPermanently)
+            {
+                _displayChangesPending = false;
+                return;
+            }
+
+            if (DateTime.Now < _nextDisplayChangeRetry) return;
+
+            try
+            {
+                InitializeDxgiDuplication();
+                _displayChangesPending = false;
+                _displayChangeRetries = 0;
+            }
+            catch (Exception ex)
+            {
+                _displayChangesPending = false;
+                _displayChangeRetries++;
+                _nextDisplayChangeRetry = DateTime.Now.Add(_displayChangeRetryCooldown);
+
+                if (_displayChangeRetries >= MAX_DISPLAY_CHANGE_RETRIES)
                 {
-                    InitializeDxgiDuplication();
-                    _displayChangesPending = false;
+                    _directXFailedPermanently = true;
+                    Dictionary.dropdownState["Screen Capture Method"] = "GDI+";
+                    _currentCaptureMethod = "GDI+";
+
+                    LogManager.Log(LogLevel.Error, $"DirectX Desktop Duplication kept failing after a display change ({ex.Message}). Switched to GDI+ capture.", true, 6000);
                 }
-                catch (Exception ex)
+                else
                 {
-
+                    LogManager.Log(LogLevel.Warning, $"Failed to reinitialize DirectX after display change: {ex.Message}");
                 }
             }
         }
@@ -87,6 +131,12 @@ namespace AILogic
         public void InitializeDxgiDuplication()
         {
             DisposeDxgiResources();
+
+            // Released in the finally below. The duplication session and the D3D11 device keep their
+            // own references, so holding on to these here would leak one COM reference per call.
+            IDXGIOutput1? targetOutput1 = null;
+            IDXGIAdapter1? targetAdapter = null;
+
             try
             {
                 var currentDisplay = DisplayManager.CurrentDisplay;
@@ -97,8 +147,6 @@ namespace AILogic
                 }
 
                 using var factory = DXGI.CreateDXGIFactory1<IDXGIFactory1>();
-                IDXGIOutput1? targetOutput1 = null;
-                IDXGIAdapter1? targetAdapter = null;
                 bool foundTarget = false;
 
                 for (uint adapterIndex = 0;
@@ -138,6 +186,7 @@ namespace AILogic
                     }
 
                     if (foundTarget) break;
+                    adapter.Dispose(); // not the adapter we want - release it instead of leaking it
                 }
 
                 // Fallback to specific display index if not found
@@ -154,16 +203,18 @@ namespace AILogic
                             adapter.EnumOutputs(outputIndex, out var output).Success;
                             outputIndex++)
                         {
-                            if (currentIndex == targetIndex)
+                            using (output)
                             {
-                                LogManager.Log(LogLevel.Warning, $"Could not match display by name or bounds. Found a fallback index, {targetIndex}.");
-                                targetOutput1 = output.QueryInterface<IDXGIOutput1>();
-                                targetAdapter = adapter;
-                                foundTarget = true;
-                                break;
+                                if (currentIndex == targetIndex)
+                                {
+                                    LogManager.Log(LogLevel.Warning, $"Could not match display by name or bounds. Found a fallback index, {targetIndex}.");
+                                    targetOutput1 = output.QueryInterface<IDXGIOutput1>();
+                                    targetAdapter = adapter;
+                                    foundTarget = true;
+                                    break;
+                                }
+                                currentIndex++;
                             }
-                            currentIndex++;
-                            output.Dispose();
                         }
 
                         if (foundTarget)
@@ -174,7 +225,7 @@ namespace AILogic
 
                 if (targetAdapter == null || targetOutput1 == null)
                 {
-                    LogManager.Log(LogLevel.Error, "No suitable display output found for DirectX capture.", true, 6000);
+                    LogInitFailure("No suitable display output found for DirectX capture.");
                     throw new Exception("No suitable display output found");
                 }
 
@@ -210,7 +261,7 @@ namespace AILogic
 
                     if (result.Failure || _dxDevice == null)
                     {
-                        LogManager.Log(LogLevel.Error, $"Failed to create D3D11 device: {result}", true, 6000);
+                        LogInitFailure($"Failed to create D3D11 device: {result}");
                         throw new Exception($"Failed to create D3D11 device: {result}");
                     }
                 }
@@ -218,26 +269,44 @@ namespace AILogic
                 // Create desktop duplication
                 _deskDuplication = targetOutput1.DuplicateOutput(_dxDevice);
                 _consecutiveFailures = 0; //reset on success
+                _initFailureNotified = false; // a new failure streak may notify again
 
                 LogManager.Log(LogLevel.Info, "DirectX Desktop Duplication initialized successfully.");
             }
             catch (SharpGenException ex) when (ex.ResultCode == Vortice.DXGI.ResultCode.Unsupported || ex.HResult == unchecked((int)0x887A0004))
             {
-                LogManager.Log(LogLevel.Error, $"DirectX Desktop Duplication not supported on this system: {ex.Message}", true, 6000);
+                LogManager.Log(LogLevel.Error, $"DirectX Desktop Duplication not supported on this system: {ex.Message}");
                 _directXFailedPermanently = true;
                 DisposeDxgiResources();
 
                 Dictionary.dropdownState["Screen Capture Method"] = "GDI+";
                 _currentCaptureMethod = "GDI+";
 
-                LogManager.Log(LogLevel.Error, "DirectX Desktop Duplication not supported on this system. Switched to GDI+ capture.", true, 6000);
+                LogInitFailure("DirectX Desktop Duplication not supported on this system. Switched to GDI+ capture.");
             }
             catch (Exception ex)
             {
-                LogManager.Log(LogLevel.Error, $"Failed to initialize DirectX Desktop Duplication: {ex.Message}", true, 6000);
+                LogInitFailure($"Failed to initialize DirectX Desktop Duplication: {ex.Message}");
                 DisposeDxgiResources();
                 throw;
             }
+            finally
+            {
+                // Safe to release now: DuplicateOutput and D3D11CreateDevice hold their own references.
+                targetOutput1?.Dispose();
+                targetAdapter?.Dispose();
+            }
+        }
+
+        /// <summary>
+        /// Initialization runs on the capture path, so a persistent failure would otherwise pop a
+        /// notice window every frame. Notify once per failure streak; the flag clears on the next success.
+        /// </summary>
+        private void LogInitFailure(string message)
+        {
+            bool notify = !_initFailureNotified;
+            _initFailureNotified = true;
+            LogManager.Log(LogLevel.Error, message, notify, 6000);
         }
         private Bitmap? DirectX(Rectangle detectionBox)
         {
@@ -254,20 +323,21 @@ namespace AILogic
 
                 lock (_displayLock)
                 {
-                    if (_displayChangesPending)
-                    {
-                        InitializeDxgiDuplication();
-                        _displayChangesPending = false;
-                    }
+                    TryReinitializeAfterDisplayChange();
                 }
 
-                // Check if we need to reinitialize
+                // Check if we need to reinitialize - routed through the backed-off helper so a
+                // permanent failure cannot re-run the full adapter/output enumeration every frame.
                 if (_dxDevice == null || _dxDevice.ImmediateContext == null || _deskDuplication == null)
                 {
-                    InitializeDxgiDuplication();
+                    lock (_displayLock)
+                    {
+                        _displayChangesPending = true;
+                        TryReinitializeAfterDisplayChange();
+                    }
+
                     if (_dxDevice == null || _dxDevice.ImmediateContext == null || _deskDuplication == null)
                     {
-                        lock (_displayLock) { _displayChangesPending = true; }
                         return GetCachedFrame(detectionBox);
                     }
                 }
@@ -347,21 +417,35 @@ namespace AILogic
                     int srcRight = Math.Min(relativeDetectionRight, DisplayManager.ScreenWidth);
                     int srcBottom = Math.Min(relativeDetectionBottom, DisplayManager.ScreenHeight);
 
+                    // Destination sub-rect that CopySubresourceRegion actually fills
+                    int dstValidLeft = srcLeft - relativeDetectionLeft;
+                    int dstValidTop = srcTop - relativeDetectionTop;
+                    int dstValidRight = dstValidLeft + (srcRight - srcLeft);
+                    int dstValidBottom = dstValidTop + (srcBottom - srcTop);
+                    bool captureClipped = dstValidLeft > 0 || dstValidTop > 0 || dstValidRight < w || dstValidBottom < h;
+
                     // Only copy if there's a visible region
                     if (srcRight > srcLeft && srcBottom > srcTop)
                     {
+                        _noVisibleRegionNotified = false;
+
                         var box = new Box(srcLeft, srcTop, 0, srcRight, srcBottom, 1);
 
                         _dxDevice.ImmediateContext.CopySubresourceRegion(
                                _stagingTex, 0,
-                               (uint)(srcLeft - relativeDetectionLeft),
-                               (uint)(srcTop - relativeDetectionTop),
+                               (uint)dstValidLeft,
+                               (uint)dstValidTop,
                                0,
                                screenTexture, 0, box);
                     }
                     else
                     {
-                        LogManager.Log(LogLevel.Warning, "No visible region to copy from DirectX capture.", true, 3000);
+                        // This runs per frame on a multi-monitor setup, so notify only once per streak.
+                        if (!_noVisibleRegionNotified)
+                        {
+                            _noVisibleRegionNotified = true;
+                            LogManager.Log(LogLevel.Warning, "No visible region to copy from DirectX capture.", true, 3000);
+                        }
                         return GetCachedFrame(detectionBox);
                     }
 
@@ -387,6 +471,30 @@ namespace AILogic
                                 Buffer.MemoryCopy(src, dst, dstStride, copyBytesPerRow);
                                 src += srcStride;
                                 dst += dstStride;
+                            }
+
+                            // A clipped capture only fills part of the staging texture, and the staging
+                            // texture is never cleared - the remainder still holds the previous frame's
+                            // pixels. Blank it out so stale content is not fed to the model as real data.
+                            if (captureClipped)
+                            {
+                                byte* clearBase = (byte*)mapDest.Scan0;
+                                for (int y = 0; y < h; y++)
+                                {
+                                    byte* rowPtr = clearBase + (y * dstStride);
+
+                                    if (y < dstValidTop || y >= dstValidBottom)
+                                    {
+                                        new Span<byte>(rowPtr, w * 4).Clear();
+                                        continue;
+                                    }
+
+                                    if (dstValidLeft > 0)
+                                        new Span<byte>(rowPtr, dstValidLeft * 4).Clear();
+
+                                    if (dstValidRight < w)
+                                        new Span<byte>(rowPtr + (dstValidRight * 4), (w - dstValidRight) * 4).Clear();
+                                }
                             }
 
                             if (Dictionary.toggleState["Third Person Support"]) // a mask basically
@@ -602,6 +710,8 @@ namespace AILogic
                     _stagingTex = null;
                     _dxDevice = null;
                     _cachedFrame = null;
+                    directXBitmap = null; // MUST be nulled: DirectX() reads directXBitmap.Width and
+                                          // would otherwise touch a disposed Bitmap forever after.
 
                     // Small delay to ensure resources are fully released
                     //System.Threading.Thread.Sleep(50);
@@ -617,6 +727,7 @@ namespace AILogic
             DisplayManager.DisplayChanged -= OnDisplayChanged;
             DisposeDxgiResources();
             screenCaptureBitmap?.Dispose();
+            screenCaptureBitmap = null;
         }
         #endregion
     }

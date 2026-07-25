@@ -4,8 +4,12 @@ namespace Aimmy2.MouseMovementLibraries.GHubSupport.dist
 {
     internal class WinAPI
     {
+        // SourceString is passed as a raw pointer on purpose: RtlInitUnicodeString only stores the
+        // pointer inside the UNICODE_STRING, so the buffer has to stay alive after the call returns.
+        // Marshalling a string here would hand the kernel a pointer to a temporary buffer that the
+        // interop marshaller frees the moment this call returns.
         [DllImport("ntdll.dll")]
-        public static extern void RtlInitUnicodeString(nint DestinationString, [MarshalAs(UnmanagedType.LPWStr)] string SourceString);
+        public static extern void RtlInitUnicodeString(nint DestinationString, nint SourceString);
 
         [DllImport("ntdll.dll", ExactSpelling = true, SetLastError = true)]
         public static extern int NtCreateFile(

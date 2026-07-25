@@ -25,13 +25,25 @@ namespace Aimmy2.MouseMovementLibraries.GHubSupport.dist
 
                 Length = Marshal.SizeOf(this);
                 objectName = Marshal.AllocHGlobal(Marshal.SizeOf(typeof(UNICODE_STRING)));
-                WinAPI.RtlInitUnicodeString(objectName, name);
+
+                // Own the string buffer ourselves: RtlInitUnicodeString just points UNICODE_STRING.Buffer
+                // at it, and that pointer is handed to NtCreateFile long after this constructor returns.
+                // It is released in Dispose (read back out of the UNICODE_STRING, so that no extra field
+                // is added to this struct -- its layout and Length are passed straight to the kernel).
+                nint nameBuffer = Marshal.StringToHGlobalUni(name);
+                WinAPI.RtlInitUnicodeString(objectName, nameBuffer);
             }
 
             public void Dispose()
             {
                 if (objectName != nint.Zero)
                 {
+                    UNICODE_STRING unicodeName = Marshal.PtrToStructure<UNICODE_STRING>(objectName);
+                    if (unicodeName.Buffer != nint.Zero)
+                    {
+                        Marshal.FreeHGlobal(unicodeName.Buffer);
+                    }
+
                     Marshal.FreeHGlobal(objectName);
                     objectName = nint.Zero;
                 }

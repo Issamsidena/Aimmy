@@ -1,4 +1,5 @@
 ﻿using Microsoft.Win32;
+using System.ComponentModel;
 using System.Diagnostics;
 using System.Windows;
 using Visuality;
@@ -24,7 +25,9 @@ namespace Other
             return false;
         }
 
-        public static bool IsMemoryIntegrityEnabled() // false if enabled true if disabled, you want it disabled
+        // Returns true when memory integrity is OFF, which is the state the Logitech driver needs.
+        // (Named IsMemoryIntegrityEnabled before, which read as the exact opposite of what it returns.)
+        public static bool IsMemoryIntegrityDisabled()
         {
             //credits to Themida
             string keyPath = @"HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\DeviceGuard\Scenarios\HypervisorEnforceCodeIntegrity";
@@ -49,8 +52,20 @@ namespace Other
                     return false;
                 }
 
-                string ghubfilepath = process.MainModule.FileName;
-                if (ghubfilepath == null)
+                string? ghubfilepath;
+                try
+                {
+                    // Reading another process' module list needs elevation; without it this throws a
+                    // Win32Exception ("Access is denied"), which used to take the whole app down.
+                    ghubfilepath = process.MainModule?.FileName;
+                }
+                catch (Exception ex) when (ex is Win32Exception or InvalidOperationException or NotSupportedException)
+                {
+                    LogManager.Log(LogManager.LogLevel.Error, $"Could not read the LG HUB process: {ex.Message}\nRun as admin and try again.", true);
+                    return false;
+                }
+
+                if (string.IsNullOrEmpty(ghubfilepath))
                 {
                     LogManager.Log(LogManager.LogLevel.Error, "An error occurred. Run as admin and try again.", true);
                     return false;
@@ -58,7 +73,8 @@ namespace Other
 
                 FileVersionInfo versionInfo = FileVersionInfo.GetVersionInfo(ghubfilepath);
 
-                if (!versionInfo.ProductVersion.Contains("2021"))
+                string? productVersion = versionInfo.ProductVersion;
+                if (productVersion == null || !productVersion.Contains("2021"))
                 {
                     ShowLGHubImproperInstallMessage();
                     return false;
@@ -67,6 +83,11 @@ namespace Other
                 return true;
             }
             catch (AccessViolationException ex)
+            {
+                LogManager.Log(LogManager.LogLevel.Error, $"An error occured: {ex.Message}\nRun as admin and try again.", true);
+                return false;
+            }
+            catch (Exception ex)
             {
                 LogManager.Log(LogManager.LogLevel.Error, $"An error occured: {ex.Message}\nRun as admin and try again.", true);
                 return false;

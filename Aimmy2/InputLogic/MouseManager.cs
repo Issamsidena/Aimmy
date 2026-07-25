@@ -4,6 +4,7 @@ using Class;
 using MouseMovementLibraries.ddxoftSupport;
 using MouseMovementLibraries.RazerSupport;
 using MouseMovementLibraries.SendInputSupport;
+using System.Diagnostics;
 using System.Drawing;
 using System.Runtime.InteropServices;
 
@@ -11,11 +12,23 @@ namespace InputLogic
 {
     internal class MouseManager
     {
-        private static readonly double ScreenWidth = WinAPICaller.ScreenWidth;
-        private static readonly double ScreenHeight = WinAPICaller.ScreenHeight;
+        // Read the SELECTED display every call. These used to be static readonly snapshots of
+        // WinAPICaller's PRIMARY-monitor size, taken once at type load, while AIManager located
+        // targets on DisplayManager's selected display -- so on any multi-monitor setup where the two
+        // differ, every tick picked up a constant directional bias.
+        private static double ScreenWidth => DisplayManager.ScreenWidth;
+        private static double ScreenHeight => DisplayManager.ScreenHeight;
+
+        // Where the crosshair actually is, in the same absolute screen space AIManager reports
+        // targets in (its detection box is centred here).
+        private static double CrosshairX => DisplayManager.ScreenLeft + (DisplayManager.ScreenWidth / 2.0);
+        private static double CrosshairY => DisplayManager.ScreenTop + (DisplayManager.ScreenHeight / 2.0);
 
         private static DateTime LastClickTime = DateTime.MinValue;
         private static bool isSpraying = false;
+        // Guards the physical button state so Auto Trigger and Rapid Fire cannot interleave a
+        // down/up pair and strand the button held.
+        private static readonly object _buttonLock = new();
 
         private const uint MOUSEEVENTF_LEFTDOWN = 0x0002;
         private const uint MOUSEEVENTF_LEFTUP = 0x0004;
@@ -29,15 +42,35 @@ namespace InputLogic
         private static double _antiRecoilResidualX;
         private static double _antiRecoilResidualY;
 
+        // Same trick for AIM movement. Without it every per-tick command below 1px truncated to zero
+        // permanently, so slow settings froze instead of moving slowly and the only thing still
+        // moving the mouse near the target was the random jitter.
+        private static double _aimResidualX;
+        private static double _aimResidualY;
+
         // Aim Strength target low-pass state: the smoothed target the crosshair actually aims at.
         private static double _smoothedTargetX;
         private static double _smoothedTargetY;
         private static bool _hasSmoothedTarget;
 
+        // Per-tick timing so the response rate is defined per SECOND rather than per FRAME. Every
+        // gain here used to be a per-frame fraction, which meant aim speed silently changed with
+        // framerate, resolution, GPU load and the AI FPS Limit slider.
+        private static readonly Stopwatch _moveClock = Stopwatch.StartNew();
+        private static double _lastMoveSeconds = -1.0;
+
+        // The framerate at which a given Sensitivity value behaves exactly as it always did. Away
+        // from it the per-tick fraction is re-derived from elapsed time instead of being applied raw.
+        private const double ReferenceFrameSeconds = 1.0 / 144.0;
+
         [DllImport("user32.dll")]
         private static extern void mouse_event(uint dwFlags, uint dx, uint dy, uint dwData, int dwExtraInfo);
 
-        private static Random MouseRandom = new();
+        [DllImport("user32.dll")]
+        private static extern IntPtr GetForegroundWindow();
+
+        [DllImport("user32.dll")]
+        private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
 
         internal static double EmaSmoothing(double previousValue, double currentValue, double smoothingFactor) => (currentValue * smoothingFactor) + (previousValue * (1 - smoothingFactor));
 
@@ -75,11 +108,24 @@ namespace InputLogic
             return (mouseDownAction, mouseUpAction);
         }
 
+        // Only inject clicks while a window OTHER than our own UI has focus. Without this, holding the
+        // Auto Trigger keybind (default Right) anywhere -- desktop, browser, the Aimmy window itself
+        // -- injected synthetic LEFT clicks into whatever happened to be under the cursor.
+        private static bool IsExternalWindowFocused()
+        {
+            IntPtr foreground = GetForegroundWindow();
+            if (foreground == IntPtr.Zero) return false;
+
+            GetWindowThreadProcessId(foreground, out uint pid);
+            return pid != 0 && pid != (uint)Environment.ProcessId;
+        }
+
         public static async Task DoTriggerClick(RectangleF? detectionBox = null)
         {
             // Gate by Auto Trigger Keybind / Constant AI Shooting (no longer tied to Aim Keybind).
             if (!(Dictionary.toggleState["Constant AI Shooting"]
-                  || InputBindingManager.IsHoldingBinding("Auto Trigger Keybind")))
+                  || InputBindingManager.IsHoldingBinding("Auto Trigger Keybind"))
+                || !IsExternalWindowFocused())
             {
                 ResetSprayState();
                 return;
@@ -98,7 +144,7 @@ namespace InputLogic
                     }
                 }
 
-                if (!isSpraying) HoldMouseButton();
+                HoldMouseButton();
                 return;
             }
 
@@ -112,45 +158,107 @@ namespace InputLogic
                 return;
             }
 
-            var (mouseDown, mouseUp) = GetMouseActions();
-
-            mouseDown.Invoke();
-            await Task.Delay(clickDelayMilliseconds);
-            mouseUp.Invoke();
-
             LastClickTime = DateTime.UtcNow;
+            await EmitClickAsync(clickDelayMilliseconds);
         }
 
-        // Single synthetic click for Rapid Fire. Registers the echo so the global hook ignores
-        // the click coming back through it (important when the keybind is the Left mouse button).
+        // Single synthetic click for Rapid Fire.
         public static async Task DoRapidFireClick(int clickHoldMilliseconds = 10)
         {
-            var (mouseDown, mouseUp) = GetMouseActions();
+            await EmitClickAsync(clickHoldMilliseconds);
+        }
 
-            InputBindingManager.RegisterInjectedClick("Left");
+        // Serializes Auto Trigger and Rapid Fire so their down/up pairs cannot interleave, captures
+        // ONE backend for the whole pair so the up can never be sent through a different driver than
+        // the down, registers the echo so the global hook ignores our own click, and releases in a
+        // finally so an exception between down and up cannot strand the button held.
+        private static readonly SemaphoreSlim _clickGate = new(1, 1);
 
-            mouseDown.Invoke();
-            await Task.Delay(clickHoldMilliseconds);
-            mouseUp.Invoke();
+        private static async Task EmitClickAsync(int holdMilliseconds)
+        {
+            if (!await _clickGate.WaitAsync(250)) return;
+
+            try
+            {
+                var (mouseDown, mouseUp) = GetMouseActions();
+                InputBindingManager.RegisterInjectedClick("Left");
+
+                try
+                {
+                    mouseDown.Invoke();
+                    await Task.Delay(holdMilliseconds);
+                }
+                finally
+                {
+                    try { mouseUp.Invoke(); } catch { /* never leave the button down */ }
+                }
+            }
+            finally
+            {
+                _clickGate.Release();
+            }
         }
 
         #region Spray Mode Methods
+
+        // The exact "up" that pairs with the "down" we actually sent, captured at hold time.
+        private static Action? _sprayReleaseAction;
+
+        // Deadman switch. The button may only stay held while something keeps refreshing the hold.
+        // Previously the ONLY release paths lived inside the AI loop's AutoTrigger(), so losing the
+        // target, releasing the key, or pressing Emergency Stop could each leave the physical mouse
+        // button pressed with no code path left running to release it.
+        private static long _sprayRefreshTicks;
+        private static readonly System.Threading.Timer _sprayWatchdog =
+            new(_ => SprayWatchdogTick(), null, 200, 200);
+
+        private static void SprayWatchdogTick()
+        {
+            if (!isSpraying) return;
+
+            long idleMs = (DateTime.UtcNow.Ticks - Interlocked.Read(ref _sprayRefreshTicks))
+                          / TimeSpan.TicksPerMillisecond;
+            if (idleMs > 300)
+            {
+                ReleaseMouseButton();
+            }
+        }
+
         public static void HoldMouseButton()
         {
-            if (isSpraying) return;
+            lock (_buttonLock)
+            {
+                Interlocked.Exchange(ref _sprayRefreshTicks, DateTime.UtcNow.Ticks);
+                if (isSpraying) return;
 
-            var (mouseDown, _) = GetMouseActions();
-            mouseDown.Invoke();
-            isSpraying = true;
+                var (mouseDown, mouseUp) = GetMouseActions();
+                try
+                {
+                    mouseDown.Invoke();
+                    _sprayReleaseAction = mouseUp;
+                    isSpraying = true;
+                }
+                catch
+                {
+                    _sprayReleaseAction = null;
+                }
+            }
         }
 
         public static void ReleaseMouseButton()
         {
-            if (!isSpraying) return;
+            lock (_buttonLock)
+            {
+                if (!isSpraying) return;
 
-            var (_, mouseUp) = GetMouseActions();
-            mouseUp.Invoke();
-            isSpraying = false;
+                try { (_sprayReleaseAction ?? GetMouseActions().up).Invoke(); }
+                catch { /* fall through: never stay stuck believing we still hold the button */ }
+                finally
+                {
+                    _sprayReleaseAction = null;
+                    isSpraying = false;
+                }
+            }
         }
 
         public static void ResetSprayState()
@@ -185,6 +293,13 @@ namespace InputLogic
             // point -- so you can push Sensitivity fast for an "instant" feel and this cancels the jitter
             // that speed would normally cause. Speed/feel stay owned by Sensitivity / Mouse Curve /
             // Movement Path (they still fully apply). 0 = off (raw target, original behavior).
+            // Elapsed time for this tick, clamped so a frame hitch (or the first move after idling)
+            // cannot turn into one enormous step. Computed first because Aim Strength needs it too.
+            double nowSeconds = _moveClock.Elapsed.TotalSeconds;
+            double dtSeconds = _lastMoveSeconds < 0 ? ReferenceFrameSeconds : nowSeconds - _lastMoveSeconds;
+            _lastMoveSeconds = nowSeconds;
+            dtSeconds = Math.Clamp(dtSeconds, 0.0005, 0.05);
+
             double aimStrength = AimSettings.AimStrength;
             if (aimStrength > 0)
             {
@@ -200,7 +315,11 @@ namespace InputLogic
                         Math.Pow(detectedX - _smoothedTargetX, 2) +
                         Math.Pow(detectedY - _smoothedTargetY, 2));
 
-                    if (jump > 200.0)
+                    // Scale the "this is a different target" radius with the display instead of
+                    // hardcoding 200px, which was far too tight at 1440p and 4K.
+                    double reacquireRadius = Math.Max(120.0, ScreenHeight * 0.18);
+
+                    if (jump > reacquireRadius)
                     {
                         // Big jump = a new/different target: snap the filter straight there so it does
                         // not crawl across the screen from the last target's position.
@@ -209,9 +328,11 @@ namespace InputLogic
                     }
                     else
                     {
-                        // alpha = how much of the raw detection is folded in each frame. Higher strength
-                        // -> lower alpha -> heavier smoothing -> steadier lock (slightly more lag).
-                        double alpha = 1.0 - aimStrength * 0.85; // strength 1.0 -> 0.15, strength 0.5 -> 0.575
+                        // alpha = how much of the raw detection is folded in. Higher strength -> lower
+                        // alpha -> heavier smoothing -> steadier lock (slightly more lag). Time-adjusted
+                        // so the same slider value smooths identically at 60 and 240 FPS.
+                        double perFrameAlpha = 1.0 - aimStrength * 0.85; // 1.0 -> 0.15, 0.5 -> 0.575
+                        double alpha = TimeAdjustedFraction(perFrameAlpha, dtSeconds);
                         _smoothedTargetX += (detectedX - _smoothedTargetX) * alpha;
                         _smoothedTargetY += (detectedY - _smoothedTargetY) * alpha;
                     }
@@ -225,40 +346,28 @@ namespace InputLogic
                 _hasSmoothedTarget = false;
             }
 
-            int halfScreenWidth = (int)ScreenWidth / 2;
-            int halfScreenHeight = (int)ScreenHeight / 2;
+            // Offset from the crosshair, in real screen pixels on BOTH axes.
+            double targetX = detectedX - CrosshairX;
+            double targetY = detectedY - CrosshairY;
 
-            int targetX = detectedX - halfScreenWidth;
-            int targetY = detectedY - halfScreenHeight;
+            double sensitivity = Convert.ToDouble(Dictionary.sliderSettings["Mouse Sensitivity (+/-)"]);
+            double perFrameFraction = Math.Clamp(1.0 - sensitivity, 0.0, 1.0);
+            double t = TimeAdjustedFraction(perFrameFraction, dtSeconds);
 
-            double aspectRatioCorrection = ScreenWidth / ScreenHeight;
-
-            int MouseJitter = (int)Dictionary.sliderSettings["Mouse Jitter"];
-            int jitterX = MouseRandom.Next(-MouseJitter, MouseJitter);
-            int jitterY = MouseRandom.Next(-MouseJitter, MouseJitter);
-
-            Point start = new(0, 0);
-            Point end = new(targetX, targetY);
-            Point newPosition = new Point(0, 0);
+            PointF start = new(0f, 0f);
+            PointF end = new((float)targetX, (float)targetY);
+            PointF newPosition;
 
             switch (Dictionary.dropdownState["Movement Path"])
             {
-                // "None" mirrors v2.6.5 Cubic Bezier exactly (default behavior).
-                case "None":
-                    {
-                        Point noneC1 = new Point(start.X + (end.X - start.X) / 3, start.Y + (end.Y - start.Y) / 3);
-                        Point noneC2 = new Point(start.X + 2 * (end.X - start.X) / 3, start.Y + 2 * (end.Y - start.Y) / 3);
-                        newPosition = MovementPaths.CubicBezier(start, end, noneC1, noneC2, 1 - Dictionary.sliderSettings["Mouse Sensitivity (+/-)"]);
-                        break;
-                    }
-                // "Cubic Bezier" mirrors legacy v2.5.5 — math only, EMA applied below by MoveCrosshair.
                 // "Curve Strength" bows the control points perpendicular to the line. Default 0 keeps
-                // them collinear, reproducing the original straight bezier exactly.
+                // them collinear -- and collinear thirds are exactly a straight line, which is why
+                // this option is indistinguishable from Lerp until Curve Strength is raised.
                 case "Cubic Bezier":
                     {
-                        Point control1 = new Point(start.X + (end.X - start.X) / 3, start.Y + (end.Y - start.Y) / 3);
-                        Point control2 = new Point(start.X + 2 * (end.X - start.X) / 3, start.Y + 2 * (end.Y - start.Y) / 3);
-                        double curveStrength = (double)Dictionary.sliderSettings["Curve Strength"];
+                        PointF control1 = new(start.X + (end.X - start.X) / 3f, start.Y + (end.Y - start.Y) / 3f);
+                        PointF control2 = new(start.X + 2 * (end.X - start.X) / 3f, start.Y + 2 * (end.Y - start.Y) / 3f);
+                        double curveStrength = Convert.ToDouble(Dictionary.sliderSettings["Curve Strength"]);
                         if (curveStrength != 0)
                         {
                             double perpX = -(end.Y - start.Y);
@@ -268,84 +377,141 @@ namespace InputLogic
                             {
                                 perpX /= perpLen;
                                 perpY /= perpLen;
-                                control1 = new Point(control1.X + (int)(perpX * curveStrength), control1.Y + (int)(perpY * curveStrength));
-                                control2 = new Point(control2.X + (int)(perpX * curveStrength), control2.Y + (int)(perpY * curveStrength));
+                                control1 = new PointF(control1.X + (float)(perpX * curveStrength), control1.Y + (float)(perpY * curveStrength));
+                                control2 = new PointF(control2.X + (float)(perpX * curveStrength), control2.Y + (float)(perpY * curveStrength));
                             }
                         }
-                        newPosition = MovementPaths.CubicBezierLegacy(start, end, control1, control2, 1 - Dictionary.sliderSettings["Mouse Sensitivity (+/-)"]);
+                        newPosition = MovementPaths.CubicBezier(start, end, control1, control2, t);
                         break;
                     }
-                case "Straight":
-                    newPosition = MovementPaths.Lerp(start, end, 1 - Dictionary.sliderSettings["Mouse Sensitivity (+/-)"]);
-                    break;
                 case "Smoothstep":
-                    newPosition = MovementPaths.Smoothstep(start, end, 1 - Dictionary.sliderSettings["Mouse Sensitivity (+/-)"]);
+                    newPosition = MovementPaths.Smoothstep(start, end, t);
                     break;
                 case "Exponential":
-                    newPosition = MovementPaths.Exponential(start, end, 1 - (Dictionary.sliderSettings["Mouse Sensitivity (+/-)"] - 0.2), (double)Dictionary.sliderSettings["Exponent Strength"]);
+                    // No -0.2 offset any more. That skew pushed t above 1.0 for any Sensitivity below
+                    // 0.2, so the path commanded more than the remaining distance and oscillated.
+                    newPosition = MovementPaths.Exponential(start, end, t, Convert.ToDouble(Dictionary.sliderSettings["Exponent Strength"]));
                     break;
                 case "Adaptive":
-                    newPosition = MovementPaths.Adaptive(start, end, 1 - Dictionary.sliderSettings["Mouse Sensitivity (+/-)"], (double)Dictionary.sliderSettings["Adaptation Strength"]);
+                    newPosition = MovementPaths.Adaptive(start, end, t, Convert.ToDouble(Dictionary.sliderSettings["Adaptation Strength"]));
                     break;
                 case "Perlin Noise":
-                    newPosition = MovementPaths.PerlinNoise(start, end, 1 - Dictionary.sliderSettings["Mouse Sensitivity (+/-)"], (double)Dictionary.sliderSettings["Noise Level"], 0.5);
+                    newPosition = MovementPaths.PerlinNoise(start, end, t, Convert.ToDouble(Dictionary.sliderSettings["Noise Level"]), 0.5);
                     break;
+                // "None" and "Straight" are the same straight-line interpolation. Both are kept so
+                // existing saved configs keep loading.
+                case "None":
+                case "Straight":
                 default:
-                    newPosition = MovementPaths.Lerp(start, end, 1 - Dictionary.sliderSettings["Mouse Sensitivity (+/-)"]);
+                    newPosition = MovementPaths.Lerp(start, end, t);
                     break;
             }
 
-            // "None" applies EMA internally (v2.6.5 behavior); skip post-call only for None to avoid double-smoothing.
-            // "Cubic Bezier" stays on the legacy v2.5.5 path — EMA must run here.
-            if (IsEMASmoothingEnabled && Dictionary.dropdownState["Movement Path"] != "None")
+            double moveX = newPosition.X;
+            double moveY = newPosition.Y;
+
+            // EMA smooths the raw path output against the PREVIOUS RAW path output. previousX/Y used
+            // to be assigned the fully processed, post-jitter, post-aspect value, so the filter was
+            // recycling its own random noise and its Y state was on a different scale to its input.
+            if (IsEMASmoothingEnabled)
             {
-                newPosition.X = (int)EmaSmoothing(previousX, newPosition.X, smoothingFactor);
-                newPosition.Y = (int)EmaSmoothing(previousY, newPosition.Y, smoothingFactor);
+                double emaAlpha = TimeAdjustedFraction(Math.Clamp(smoothingFactor, 0.0, 1.0), dtSeconds);
+                moveX = EmaSmoothing(previousX, moveX, emaAlpha);
+                moveY = EmaSmoothing(previousY, moveY, emaAlpha);
             }
+
+            previousX = moveX;
+            previousY = moveY;
 
             // Mouse Curve response: scale the per-tick movement (Smooth/Legit slower, Aggressive faster).
             double mouseCurveFactor = GetMouseCurveFactor();
-            newPosition.X = (int)(newPosition.X * mouseCurveFactor);
-            newPosition.Y = (int)(newPosition.Y * mouseCurveFactor);
+            moveX *= mouseCurveFactor;
+            moveY *= mouseCurveFactor;
 
-            newPosition.X = Math.Clamp(newPosition.X, -150, 150);
-            newPosition.Y = Math.Clamp(newPosition.Y, -150, 150);
+            // Per-tick speed limit. There is deliberately no aspect-ratio division here: the target
+            // offset is now real screen pixels on both axes, so scaling Y by the aspect ratio would
+            // just make vertical aim 1.78x slower than horizontal for no reason. It only ever looked
+            // right because it happened to cancel the old ScreenHeight/IMAGE_SIZE scaling.
+            moveX = Math.Clamp(moveX, -150.0, 150.0);
+            moveY = Math.Clamp(moveY, -150.0, 150.0);
 
-            newPosition.Y = (int)(newPosition.Y / aspectRatioCorrection);
-
-            newPosition.X += jitterX;
-            newPosition.Y += jitterY;
-
-            switch (Dictionary.dropdownState["Mouse Movement Method"])
+            // Zero-mean jitter. Random.Next(-J, J) excludes its upper bound, so the old jitter
+            // averaged -0.5px per axis per tick -- a constant drift up and to the left. Random.Shared
+            // is also safe to touch from the pool threads this runs on; a shared Random was not.
+            double jitterAmount = Convert.ToDouble(Dictionary.sliderSettings["Mouse Jitter"]);
+            if (jitterAmount > 0)
             {
-                case "SendInput":
-                    SendInputMouse.SendMouseCommand(MOUSEEVENTF_MOVE, newPosition.X, newPosition.Y);
-                    break;
-
-                case "LG HUB":
-                    LGMouse.Move(0, newPosition.X, newPosition.Y, 0);
-                    break;
-
-                case "Razer Synapse (Require Razer Peripheral)":
-                    RZMouse.mouse_move(newPosition.X, newPosition.Y, true);
-                    break;
-
-                case "ddxoft Virtual Input Driver":
-                    DdxoftMain.ddxoftInstance.movR!(newPosition.X, newPosition.Y);
-                    break;
-
-                default:
-                    mouse_event(MOUSEEVENTF_MOVE, (uint)newPosition.X, (uint)newPosition.Y, 0, 0);
-                    break;
+                moveX += (Random.Shared.NextDouble() * 2.0 - 1.0) * jitterAmount;
+                moveY += (Random.Shared.NextDouble() * 2.0 - 1.0) * jitterAmount;
             }
 
-            previousX = newPosition.X;
-            previousY = newPosition.Y;
+            // Carry the sub-pixel remainder into the next tick instead of truncating it away.
+            _aimResidualX += moveX;
+            _aimResidualY += moveY;
+            int sendX = (int)Math.Truncate(_aimResidualX);
+            int sendY = (int)Math.Truncate(_aimResidualY);
+            _aimResidualX -= sendX;
+            _aimResidualY -= sendY;
+
+            if (sendX != 0 || sendY != 0)
+            {
+                SendMouseMove(sendX, sendY);
+            }
 
             if (!Dictionary.toggleState["Auto Trigger"])
             {
                 ResetSprayState();
             }
+        }
+
+        // Converts a "fraction per reference frame" into the equivalent fraction for the time that
+        // actually elapsed, so a given setting converges at the same RATE at any framerate.
+        private static double TimeAdjustedFraction(double perFrameFraction, double dtSeconds)
+        {
+            if (perFrameFraction <= 0.0) return 0.0;
+            if (perFrameFraction >= 1.0) return 1.0;
+            return 1.0 - Math.Pow(1.0 - perFrameFraction, dtSeconds / ReferenceFrameSeconds);
+        }
+
+        // Single place that talks to the selected backend, shared by aim and anti-recoil so the two
+        // can never disagree about units or clamping.
+        private static void SendMouseMove(int dx, int dy)
+        {
+            switch (Dictionary.dropdownState["Mouse Movement Method"])
+            {
+                case "SendInput":
+                    SendInputMouse.SendMouseCommand(MOUSEEVENTF_MOVE, dx, dy);
+                    break;
+
+                case "LG HUB":
+                    LGMouse.Move(0, dx, dy, 0);
+                    break;
+
+                case "Razer Synapse (Require Razer Peripheral)":
+                    RZMouse.mouse_move(dx, dy, true);
+                    break;
+
+                case "ddxoft Virtual Input Driver":
+                    DdxoftMain.ddxoftInstance.movR!(dx, dy);
+                    break;
+
+                default:
+                    mouse_event(MOUSEEVENTF_MOVE,
+                        unchecked((uint)dx),
+                        unchecked((uint)dy),
+                        0, 0);
+                    break;
+            }
+        }
+
+        internal static void ResetAimState()
+        {
+            _aimResidualX = 0;
+            _aimResidualY = 0;
+            _hasSmoothedTarget = false;
+            previousX = 0;
+            previousY = 0;
+            _lastMoveSeconds = -1.0;
         }
 
         #region Anti Recoil
@@ -471,27 +637,8 @@ namespace InputLogic
 
             if (xRecoil == 0 && yRecoil == 0) return;
 
-            switch (Dictionary.dropdownState["Mouse Movement Method"])
-            {
-                case "SendInput":
-                    SendInputMouse.SendMouseCommand(MOUSEEVENTF_MOVE, xRecoil, yRecoil);
-                    break;
-                case "LG HUB":
-                    LGMouse.Move(0, xRecoil, yRecoil, 0);
-                    break;
-                case "Razer Synapse (Require Razer Peripheral)":
-                    RZMouse.mouse_move(xRecoil, yRecoil, true);
-                    break;
-                case "ddxoft Virtual Input Driver":
-                    DdxoftMain.ddxoftInstance.movR!(xRecoil, yRecoil);
-                    break;
-                default:
-                    mouse_event(MOUSEEVENTF_MOVE,
-                        unchecked((uint)(short)Math.Clamp(xRecoil, short.MinValue, short.MaxValue)),
-                        unchecked((uint)(short)Math.Clamp(yRecoil, short.MinValue, short.MaxValue)),
-                        0, 0);
-                    break;
-            }
+            // Same emit path as aim, so the two subsystems cannot disagree about units or clamping.
+            SendMouseMove(xRecoil, yRecoil);
         }
 
         public static void DoAntiRecoil()

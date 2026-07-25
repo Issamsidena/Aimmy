@@ -1,4 +1,5 @@
 ﻿using Microsoft.Win32;
+using Other;
 using System.Diagnostics;
 using System.IO;
 using System.Management;
@@ -17,18 +18,83 @@ namespace MouseMovementLibraries.RazerSupport
         private const string rzctlDownloadUrl_Debug = "https://github.com/MarsQQ/rzctl/releases/download/1.0.0/rzctl.dll";
         private const string rzctlDownloadUrl_Release = "https://github.com/camilia2o7/rzctl/releases/download/Release/rzctl.dll";
 
-        [DllImport(rzctlpath, CallingConvention = CallingConvention.Cdecl)]
-        public static extern bool init();
+        // The native bool is one byte, the default marshalling would read four.
+        [DllImport(rzctlpath, CallingConvention = CallingConvention.Cdecl, EntryPoint = "init")]
+        [return: MarshalAs(UnmanagedType.I1)]
+        private static extern bool init_native();
 
-        [DllImport(rzctlpath, CallingConvention = CallingConvention.Cdecl)]
-        public static extern void mouse_move(int x, int y, bool starting_point);
+        [DllImport(rzctlpath, CallingConvention = CallingConvention.Cdecl, EntryPoint = "mouse_move")]
+        private static extern void mouse_move_native(int x, int y, bool starting_point);
 
-        [DllImport(rzctlpath, CallingConvention = CallingConvention.Cdecl)]
-        public static extern void mouse_click(int up_down);
+        [DllImport(rzctlpath, CallingConvention = CallingConvention.Cdecl, EntryPoint = "mouse_click")]
+        private static extern void mouse_click_native(int up_down);
 
         private static readonly List<string> Razer_HID = [];
 
         private static bool vcRedistPromptRejected = false;
+
+        // rzctl.dll is downloaded at runtime, so it can be missing or incompatible. Movement calls come
+        // straight from the AI loop, so a failed load has to degrade to a no-op with a single
+        // notification instead of throwing a DllNotFoundException every frame.
+        private static bool rzctlUnavailable = false;
+
+        private static bool rzctlFailureNotified = false;
+
+        #endregion
+
+        #region Guarded rzctl calls
+
+        public static bool init()
+        {
+            bool initialized = init_native();
+            if (initialized) rzctlUnavailable = false;
+            return initialized;
+        }
+
+        public static void mouse_move(int x, int y, bool starting_point)
+        {
+            if (rzctlUnavailable) return;
+
+            try
+            {
+                mouse_move_native(x, y, starting_point);
+            }
+            catch (Exception ex)
+            {
+                HandleRzctlFailure(ex);
+            }
+        }
+
+        public static void mouse_click(int up_down)
+        {
+            if (rzctlUnavailable) return;
+
+            try
+            {
+                mouse_click_native(up_down);
+            }
+            catch (Exception ex)
+            {
+                HandleRzctlFailure(ex);
+            }
+        }
+
+        private static void HandleRzctlFailure(Exception ex)
+        {
+            rzctlUnavailable = true;
+
+            if (rzctlFailureNotified) return;
+            rzctlFailureNotified = true;
+
+            try
+            {
+                LogManager.Log(LogManager.LogLevel.Error, $"rzctl.dll could not be used ({ex.GetType().Name}), Razer mouse movement is disabled. Please try a different Mouse Movement Method.", true);
+            }
+            catch
+            {
+                // Notifying is best effort, it must never throw back into the AI loop.
+            }
+        }
 
         #endregion
         public static async Task<bool> Load()

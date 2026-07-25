@@ -72,7 +72,10 @@ namespace Aimmy2.AILogic
         private readonly RunOptions? _modeloptions;
         private InferenceSession? _onnxModel;
 
-        private Thread? _aiLoopThread;
+        // The loop is async, so it CANNOT be hosted on a dedicated Thread: the thread would return at
+        // the first await and everything after it would run on the thread pool anyway -- which also
+        // made Dispose()'s Join a no-op and let the model be disposed out from under a live inference.
+        private Task? _aiLoopTask;
         private volatile bool _isAiLoopRunning;
 
         // For Auto-Labelling Data System
@@ -132,9 +135,10 @@ namespace Aimmy2.AILogic
         public double AIConf = 0;
         private static int targetX, targetY;
 
-        // Pre-calculated values - now dynamic
-        private float _scaleX => ScreenWidth / (float)IMAGE_SIZE;
-        private float _scaleY => ScreenHeight / (float)IMAGE_SIZE;
+        // NOTE: there is deliberately no screen/image "scale factor" here. The capture is 1:1, so
+        // box-local detections are translated to the screen by adding the capture box origin
+        // (UpdateDetectionBox). Multiplying by ScreenWidth/IMAGE_SIZE inflates the aim loop's gain
+        // and makes it oscillate -- do not reintroduce it.
 
         // Tensor reuse (model inference)
         private DenseTensor<float>? _reusableTensor;
@@ -318,12 +322,7 @@ namespace Aimmy2.AILogic
 
             // Begin the loop
             _isAiLoopRunning = true;
-            _aiLoopThread = new Thread(AiLoop)
-            {
-                IsBackground = true,
-                Priority = ThreadPriority.AboveNormal // Higher priority for AI thread
-            };
-            _aiLoopThread.Start();
+            _aiLoopTask = Task.Run(AiLoopAsync);
             return Task.CompletedTask;
         }
 
@@ -511,21 +510,30 @@ namespace Aimmy2.AILogic
             Dictionary.toggleState["Show Detected Player"] ||
             Dictionary.toggleState["Auto Trigger"];
 
-        private async void AiLoop()
+        private async Task AiLoopAsync()
         {
             Stopwatch stopwatch = new();
-            DetectedPlayerWindow? DetectedPlayerOverlay = Dictionary.DetectedPlayerOverlay;
 
             while (_isAiLoopRunning)
             {
-                // Check for pending size changes at the start of each iteration
+                // Re-read the overlay every iteration; it can be created/destroyed while we run, and
+                // caching it once before the loop meant a null here became a NullReferenceException
+                // raised inside a UI-thread Dispatcher.Invoke.
+                DetectedPlayerWindow? DetectedPlayerOverlay = Dictionary.DetectedPlayerOverlay;
+
+                // Check for pending size changes at the start of each iteration. Read the flag under
+                // the lock but yield OUTSIDE it -- the old `continue` inside the lock spun a full core
+                // for as long as the flag was set.
+                bool sizeChangePending;
                 lock (_sizeLock)
                 {
-                    if (_sizeChangePending)
-                    {
-                        // Skip this iteration to allow clean shutdown
-                        continue;
-                    }
+                    sizeChangePending = _sizeChangePending;
+                }
+
+                if (sizeChangePending)
+                {
+                    await Task.Delay(5);
+                    continue;
                 }
 
                 // Pause the live loop while the Performance Helper benchmark owns the model session.
@@ -578,7 +586,7 @@ namespace Aimmy2.AILogic
 
                                 using (Benchmark("CalculateCoordinates"))
                                 {
-                                    CalculateCoordinates(DetectedPlayerOverlay, closestPrediction, _scaleX, _scaleY);
+                                    CalculateCoordinates(DetectedPlayerOverlay, closestPrediction);
                                 }
 
                                 using (Benchmark("HandleAim"))
@@ -603,6 +611,14 @@ namespace Aimmy2.AILogic
                             await Task.Delay(1);
                         }
                     }
+                }
+                catch (Exception ex)
+                {
+                    // Never let a single bad frame kill the loop. Previously this method was
+                    // `async void` with no catch, so any backend exception silently stopped aim
+                    // assist for the rest of the session (or took the process down).
+                    Log(LogLevel.Error, $"AI loop iteration failed: {ex.Message}", false, 2000);
+                    await Task.Delay(50);
                 }
                 finally
                 {
@@ -800,7 +816,7 @@ namespace Aimmy2.AILogic
             });
         }
 
-        private void CalculateCoordinates(DetectedPlayerWindow DetectedPlayerOverlay, Prediction closestPrediction, float scaleX, float scaleY)
+        private void CalculateCoordinates(DetectedPlayerWindow DetectedPlayerOverlay, Prediction closestPrediction)
         {
             AIConf = closestPrediction.Confidence;
 
@@ -819,14 +835,21 @@ namespace Aimmy2.AILogic
             double YOffsetPercentage = Dictionary.sliderSettings["Y Offset (%)"];
             double XOffsetPercentage = Dictionary.sliderSettings["X Offset (%)"];
 
-            var rect = closestPrediction.Rectangle;
+            // The capture region is grabbed 1:1 from the screen (an IMAGE_SIZE x IMAGE_SIZE block of
+            // real pixels, no resampling), so a box-local detection becomes a screen point by ADDING
+            // the capture box origin -- never by scaling. LastDetectionBox is exactly that translated
+            // rect (see UpdateDetectionBox, which runs earlier in the same iteration), so aim off it
+            // directly. Scaling here instead multiplied every offset from screen centre by
+            // ScreenWidth/IMAGE_SIZE, which is the aim loop's proportional gain: 3x at 1080p/640,
+            // 4x at 1440p. Anything over 2.0 oscillates, which is where the old aim jitter came from.
+            var rect = LastDetectionBox;
 
             // Aim Bone: lock onto a specific body part inside the detection box. The aim point is a
             // fraction of the box height (from the top) with X at the box's horizontal center, and it
             // is recomputed every frame -- so as the target (and your view) moves left/right the point
             // stays on that part instead of drifting off the head into the wider body box. Because the
             // point scales with the box, the lock holds at any distance. "Custom Offsets" opts out and
-            // uses the classic Aiming Boundaries Alignment + manual X/Y offset behavior below.
+            // uses the classic Aiming Boundaries Alignment + percentage behavior below.
             string aimBone = Dictionary.dropdownState.TryGetValue("Aim Bone", out var boneObj)
                 ? boneObj?.ToString() ?? "Custom Offsets"
                 : "Custom Offsets";
@@ -842,34 +865,36 @@ namespace Aimmy2.AILogic
                     _ => 0.50f
                 };
 
-                detectedX = (int)((rect.X + rect.Width / 2f) * scaleX);
-                detectedY = (int)((rect.Y + rect.Height * boneYFraction) * scaleY);
+                // X/Y Offset still apply on top of a bone preset, so "head, but a few pixels lower"
+                // is expressible instead of the preset silently disabling both sliders.
+                detectedX = (int)(rect.X + rect.Width / 2f + XOffset);
+                detectedY = (int)(rect.Y + rect.Height * boneYFraction + YOffset);
                 return;
             }
 
             if (Dictionary.toggleState["X Axis Percentage Adjustment"])
             {
-                detectedX = (int)((rect.X + (rect.Width * (XOffsetPercentage / 100))) * scaleX);
+                detectedX = (int)(rect.X + (rect.Width * (XOffsetPercentage / 100)));
             }
             else
             {
-                detectedX = (int)((rect.X + rect.Width / 2) * scaleX + XOffset);
+                detectedX = (int)(rect.X + rect.Width / 2f + XOffset);
             }
 
             if (Dictionary.toggleState["Y Axis Percentage Adjustment"])
             {
-                detectedY = (int)((rect.Y + rect.Height - (rect.Height * (YOffsetPercentage / 100))) * scaleY + YOffset);
+                detectedY = (int)(rect.Y + rect.Height - (rect.Height * (YOffsetPercentage / 100)) + YOffset);
             }
             else
             {
-                detectedY = CalculateDetectedY(scaleY, YOffset, closestPrediction);
+                detectedY = CalculateDetectedY(YOffset, rect);
             }
         }
 
+        // rect is the target's SCREEN-space box (LastDetectionBox), so no scaling is applied here.
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static int CalculateDetectedY(float scaleY, double YOffset, Prediction closestPrediction)
+        private static int CalculateDetectedY(double YOffset, RectangleF rect)
         {
-            var rect = closestPrediction.Rectangle;
             float yBase = rect.Y;
             float yAdjustment = 0;
 
@@ -888,7 +913,7 @@ namespace Aimmy2.AILogic
                     break;
             }
 
-            return (int)((yBase + yAdjustment) * scaleY + YOffset);
+            return (int)(yBase + yAdjustment + YOffset);
         }
 
         private void HandleAim(Prediction closestPrediction)
@@ -921,23 +946,20 @@ namespace Aimmy2.AILogic
                             _approachTimer.Restart();
                             _approachStartPoint = mousePos;
                         }
-                        // check if it should move (every 2-3 frames)
-                        bool shouldMoveNow = _approachTimer.ElapsedMilliseconds % 33 < 16; // ~30 fps
-
-                        if (shouldMoveNow)
+                        // Move every frame. This used to be gated on
+                        // `_approachTimer.ElapsedMilliseconds % 33 < 16`, which is not "every 2-3
+                        // frames" -- it is a fixed 30 Hz square wave of move/freeze whose duty cycle
+                        // drifts with framerate. Approach pace is already owned by Approach Speed.
+                        if (Dictionary.toggleState["Predictions"])
                         {
-                            // During approach, move directly to target but with reduced sensitivity
-                            if (Dictionary.toggleState["Predictions"])
-                            {
-                                HandlePredictions(kalmanPrediction, closestPrediction, detectedX, detectedY);
-                            }
-                            else
-                            {
-                                double approachSensitivity = approachSpeed; // Different speed
-                                int approachX = (int)(_currentMouseX + (detectedX - _currentMouseX) * approachSensitivity);
-                                int approachY = (int)(_currentMouseY + (detectedY - _currentMouseY) * approachSensitivity);
-                                MouseManager.MoveCrosshair(approachX, approachY);
-                            }
+                            HandlePredictions(kalmanPrediction, closestPrediction, detectedX, detectedY);
+                        }
+                        else
+                        {
+                            double approachSensitivity = approachSpeed; // Different speed
+                            int approachX = (int)(_currentMouseX + (detectedX - _currentMouseX) * approachSensitivity);
+                            int approachY = (int)(_currentMouseY + (detectedY - _currentMouseY) * approachSensitivity);
+                            MouseManager.MoveCrosshair(approachX, approachY);
                         }
                     }
                     else
@@ -1326,6 +1348,9 @@ namespace Aimmy2.AILogic
             kalmanPrediction.Reset();
             wtfpredictionManager.Reset();
             ShalloePredictionV2.Reset();
+            // Drop the aim sub-pixel residual, EMA history and Aim Strength target filter too, so a
+            // new target starts clean instead of inheriting a partial step aimed at the old one.
+            MouseManager.ResetAimState();
         }
 
         // Continue an existing lock: update its position AND its velocity (EMA of per-frame
@@ -1402,9 +1427,15 @@ namespace Aimmy2.AILogic
             string stickyPriorityMode = GetTargetPriorityMode();
             Prediction? aimTarget = SelectBestPredictionByTargetPriority(
                 KDPredictions, stickyPriorityMode, screenCenterX, screenCenterY);
+            // Compare like with like. This used to measure the target's ABSOLUTE screen centre against
+            // a BOX-LOCAL crosshair (IMAGE_SIZE/2), so the distance was off by a near-constant ~640px
+            // and the "quick switch" branch below could essentially never fire.
             float nearestToCrosshairDistSq = aimTarget == null
                 ? float.MaxValue
-                : GetDistanceSq(aimTarget.ScreenCenterX, aimTarget.ScreenCenterY, screenCenterX, screenCenterY);
+                : GetDistanceSq(
+                    aimTarget.Rectangle.X + aimTarget.Rectangle.Width / 2f,
+                    aimTarget.Rectangle.Y + aimTarget.Rectangle.Height / 2f,
+                    screenCenterX, screenCenterY);
 
             if (aimTarget == null)
             {
@@ -1786,15 +1817,13 @@ namespace Aimmy2.AILogic
                 _sizeChangePending = true;
             }
 
-            // Stop the loop
+            // Stop the loop and WAIT for it to actually leave the inference call before anything
+            // below disposes the session -- otherwise _onnxModel.Dispose() can race a live Run().
             _isAiLoopRunning = false;
-            if (_aiLoopThread != null && _aiLoopThread.IsAlive)
+            if (_aiLoopTask != null)
             {
-                if (!_aiLoopThread.Join(TimeSpan.FromSeconds(1)))
-                {
-                    try { _aiLoopThread.Interrupt(); }
-                    catch { }
-                }
+                try { _aiLoopTask.Wait(TimeSpan.FromSeconds(3)); }
+                catch (AggregateException) { /* loop already faulted; it logged its own reason */ }
             }
 
             // Print final benchmarks

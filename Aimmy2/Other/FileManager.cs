@@ -42,7 +42,7 @@ namespace Other
             ModelListBox.Drop += ModelListBox_DragDrop;
 
             ConfigListBox.AllowDrop = true;
-            ConfigListBox.DragOver += ConfigListBox_DragDrop;
+            ConfigListBox.DragOver += ConfigListBox_DragOver;
             ConfigListBox.Drop += ConfigListBox_DragDrop;
 
 
@@ -184,11 +184,21 @@ namespace Other
 
                 foreach (var file in files)
                 {
-                    if (Path.GetExtension(file) == ".onnx")
+                    if (Path.GetExtension(file).Equals(".onnx", StringComparison.OrdinalIgnoreCase))
                     {
                         string fileName = Path.GetFileName(file);
-                        string destFile = Path.Combine(targetFolder, fileName);
-                        File.Move(file, destFile, true);
+                        string destFile = GetAvailableFilePath(Path.Combine(targetFolder, fileName));
+
+                        try
+                        {
+                            // Copy, the drag effect advertised to the user is Copy, so their file has to stay where it is
+                            File.Copy(file, destFile);
+                            LogManager.Log(LogManager.LogLevel.Info, $"Added model: {Path.GetFileName(destFile)}", true, 3000);
+                        }
+                        catch (Exception ex)
+                        {
+                            LogManager.Log(LogManager.LogLevel.Error, $"Failed to add model {fileName}: {ex.Message}", true, 5000);
+                        }
                     }
                 }
             }
@@ -212,18 +222,49 @@ namespace Other
             if (e.Data.GetDataPresent(DataFormats.FileDrop))
             {
                 string[] files = (string[])e.Data.GetData(DataFormats.FileDrop);
-                string targetFolder = "bin/models";
+                string targetFolder = "bin/configs";
 
                 foreach (var file in files)
                 {
-                    if (Path.GetExtension(file) == ".cfg")
+                    if (Path.GetExtension(file).Equals(".cfg", StringComparison.OrdinalIgnoreCase))
                     {
                         string fileName = Path.GetFileName(file);
-                        string destFile = Path.Combine(targetFolder, fileName);
-                        File.Move(file, destFile, true);
+                        string destFile = GetAvailableFilePath(Path.Combine(targetFolder, fileName));
+
+                        try
+                        {
+                            // Copy, the drag effect advertised to the user is Copy, so their file has to stay where it is
+                            File.Copy(file, destFile);
+                            LogManager.Log(LogManager.LogLevel.Info, $"Added config: {Path.GetFileName(destFile)}", true, 3000);
+                        }
+                        catch (Exception ex)
+                        {
+                            LogManager.Log(LogManager.LogLevel.Error, $"Failed to add config {fileName}: {ex.Message}", true, 5000);
+                        }
                     }
                 }
             }
+        }
+
+        // Never overwrite a file that is already in the folder, pick the next free "name (n).ext" instead
+        private static string GetAvailableFilePath(string destFile)
+        {
+            if (!File.Exists(destFile)) return destFile;
+
+            string directory = Path.GetDirectoryName(destFile) ?? string.Empty;
+            string fileName = Path.GetFileNameWithoutExtension(destFile);
+            string extension = Path.GetExtension(destFile);
+
+            int copyIndex = 1;
+            string availablePath;
+
+            do
+            {
+                availablePath = Path.Combine(directory, $"{fileName} ({copyIndex}){extension}");
+                copyIndex++;
+            } while (File.Exists(availablePath));
+
+            return availablePath;
         }
 
         public void LoadModelsIntoListBox(object? sender, FileSystemEventArgs? e)

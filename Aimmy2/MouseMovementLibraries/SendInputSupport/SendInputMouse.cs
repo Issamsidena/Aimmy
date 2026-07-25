@@ -1,4 +1,5 @@
-﻿using System.Runtime.InteropServices;
+﻿using Other;
+using System.Runtime.InteropServices;
 
 namespace MouseMovementLibraries.SendInputSupport
 {
@@ -10,8 +11,12 @@ namespace MouseMovementLibraries.SendInputSupport
 
         // Nori
 
-        [DllImport("user32.dll")]
-        private static extern void SendInput(int nInputs, INPUT[] pInputs, int cbSize);
+        // SendInput returns the number of events it actually inserted; 0 means the injection was
+        // blocked (UIPI, an anti-cheat filter, another hook) and used to be reported as success.
+        [DllImport("user32.dll", SetLastError = true)]
+        private static extern uint SendInput(int nInputs, INPUT[] pInputs, int cbSize);
+
+        private static bool BlockedNotified = false;
 
         [StructLayout(LayoutKind.Sequential)]
         private struct INPUT
@@ -54,7 +59,25 @@ namespace MouseMovementLibraries.SendInputSupport
                 }
             };
 
-            SendInput(1, [input], Marshal.SizeOf(typeof(INPUT)));
+            if (SendInput(1, [input], Marshal.SizeOf(typeof(INPUT))) == 0)
+            {
+                NotifyInjectionBlocked(Marshal.GetLastWin32Error());
+            }
+        }
+
+        private static void NotifyInjectionBlocked(int errorCode)
+        {
+            if (BlockedNotified) return;
+            BlockedNotified = true;
+
+            try
+            {
+                LogManager.Log(LogManager.LogLevel.Error, $"SendInput was blocked (error {errorCode}), no mouse input is being delivered. Please try a different Mouse Movement Method.", true);
+            }
+            catch
+            {
+                // Notifying is best effort, it must never throw back into the AI loop.
+            }
         }
     }
 }

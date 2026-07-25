@@ -28,9 +28,12 @@ namespace Visuality
             ClickThroughOverlay.MakeClickThrough(new WindowInteropHelper(this).Handle);
         }
 
-        public NoticeBar(string text, int waitingTime = 4000, NoticeType type = NoticeType.Info) : this(true)
+        // Transient notice: this(false) is deliberate. A standalone notice only forwards the message
+        // to the shared container and closes again, so it must NOT run the container branch below -
+        // doing so subscribed every notice to static events that OnClosed never unsubscribed, leaking
+        // a Window + a ThemeManager entry + a ThemeChanged handler per notification.
+        public NoticeBar(string text, int waitingTime = 4000, NoticeType type = NoticeType.Info) : this(false)
         {
-            _isContainerInstance = false;
             CreateStandaloneNotice(text, waitingTime, type);
         }
 

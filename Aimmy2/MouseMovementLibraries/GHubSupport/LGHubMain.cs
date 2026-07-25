@@ -13,12 +13,19 @@ namespace Aimmy2.MouseMovementLibraries.GHubSupport
                 return false;
             }
 
-            if (RequirementsManager.IsMemoryIntegrityEnabled())
+            if (RequirementsManager.IsMemoryIntegrityDisabled())
             {
                 try
                 {
-                    LGMouse.Open();
+                    bool opened = LGMouse.Open();
                     LGMouse.Close();
+
+                    if (!opened)
+                    {
+                        MessageBox.Show("Unfortunately, LG HUB Mouse Movement mode cannot be ran sufficiently.\nThe LG HUB driver device could not be opened.", "Aimmy");
+                        return false;
+                    }
+
                     return true;
                 }
                 catch (Exception ex)

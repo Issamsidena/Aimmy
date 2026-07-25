@@ -40,7 +40,18 @@ namespace Other
         public async Task CheckForUpdate(string currentVersion)
         {
             GithubManager githubManager = new();
-            var (latestVersion, latestZipUrl) = await githubManager.GetLatestReleaseInfo("Babyhamsta", "Aimmy");
+            string latestVersion;
+            string latestZipUrl;
+
+            try
+            {
+                (latestVersion, latestZipUrl) = await githubManager.GetLatestReleaseInfo("Babyhamsta", "Aimmy");
+            }
+            finally
+            {
+                // Always release the HttpClient, not just when an update is actually available
+                githubManager.Dispose();
+            }
 
             if (string.IsNullOrEmpty(latestVersion) || string.IsNullOrEmpty(latestZipUrl))
             {
@@ -64,7 +75,6 @@ namespace Other
 
             // Only update if latest version is newer
             LogManager.Log(LogManager.LogLevel.Info, $"A new version is available: {latestVersion}. Current version: {currentVersion}.", true);
-            githubManager.Dispose();
             await DoUpdate(latestZipUrl);
         }
 
@@ -107,7 +117,18 @@ namespace Other
             }
 
             Process.Start(batchScriptPath);
-            Environment.Exit(0);
+
+            // Quit through WPF instead of Environment.Exit, otherwise MainWindow's Window_Closing
+            // never runs and every unsaved setting is lost right before the files get replaced
+            var application = System.Windows.Application.Current;
+            if (application != null)
+            {
+                application.Dispatcher.Invoke(() => application.Shutdown());
+            }
+            else
+            {
+                Environment.Exit(0);
+            }
         }
 
         public void Dispose()

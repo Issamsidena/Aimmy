@@ -42,6 +42,13 @@ namespace Class
         public ASlider? S_MouseSensitivity { get; set; }
         public ASlider? S_AimStrength { get; set; }
         public ASlider? S_MouseJitter { get; set; }
+
+        // Movement Path per-curve tuning sliders
+        public ASlider? S_CurveStrength { get; set; }
+        public ASlider? S_ExponentStrength { get; set; }
+        public ASlider? S_AdaptationStrength { get; set; }
+        public ASlider? S_NoiseLevel { get; set; }
+
         public ASlider? S_StickyAimThreshold { get; set; }
         public ASlider? S_YOffset { get; set; }
         public ASlider? S_YOffsetPercent { get; set; }

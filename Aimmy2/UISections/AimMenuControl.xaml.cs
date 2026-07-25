@@ -313,7 +313,7 @@ namespace Aimmy2.Controls
                 }, tooltip: "How mouse movements are sent. Try different options if aim assist isn't working.")
                 .AddDropdown("Movement Path", d =>
                 {
-                    d.DropdownBox.SelectedIndex = 0;
+                    d.DropdownBox.SelectedIndex = -1;  // Prevent auto-selection, MainWindow.LoadDropdownStates restores the saved path
                     uiManager.D_MovementPath = d;
                     _mainWindow.AddDropdownItem(d, "None");
                     _mainWindow.AddDropdownItem(d, "Cubic Bezier");
@@ -322,7 +322,6 @@ namespace Aimmy2.Controls
                     _mainWindow.AddDropdownItem(d, "Smoothstep");
                     _mainWindow.AddDropdownItem(d, "Adaptive");
                     _mainWindow.AddDropdownItem(d, "Perlin Noise");
-                    Dictionary.dropdownState["Movement Path"] = "None";
 
                     // Show only the slider that belongs to the chosen path (None/Straight/Smoothstep have none).
                     d.DropdownBox.SelectionChanged += (s, e) => UpdateMovementPathSliderVisibility();
@@ -332,21 +331,27 @@ namespace Aimmy2.Controls
                 .AddSlider("Curve Strength", "Strength", 1, 1, 0, 100, s =>
                 {
                     _curveStrengthSlider = s;
+                    uiManager.S_CurveStrength = s;
                     s.Visibility = Visibility.Collapsed;
                 }, tooltip: "Cubic Bezier: how far the path bows out from a straight line. 0 = straight (original behavior).")
                 .AddSlider("Exponent Strength", "Exponent", 0.1, 0.1, 1, 5, s =>
                 {
                     _exponentStrengthSlider = s;
+                    uiManager.S_ExponentStrength = s;
                     s.Visibility = Visibility.Collapsed;
                 }, tooltip: "Exponential: higher = the move accelerates harder toward the target. Default is 3.")
+                // Dictionary key stays "Adaptation Strength" (MouseManager reads it); only the shown title changes.
                 .AddSlider("Adaptation Strength", "Pixels", 1, 1, 10, 300, s =>
                 {
                     _adaptationStrengthSlider = s;
+                    uiManager.S_AdaptationStrength = s;
                     s.Visibility = Visibility.Collapsed;
-                }, tooltip: "Adaptive: distance threshold where it switches from straight to a curved path. Default is 100.")
+                }, tooltip: "Adaptive: distance threshold where it switches from straight to a curved path. Default is 100.",
+                   displayTitle: "Adaptive Threshold")
                 .AddSlider("Noise Level", "Level", 1, 1, 0, 50, s =>
                 {
                     _noiseLevelSlider = s;
+                    uiManager.S_NoiseLevel = s;
                     s.Visibility = Visibility.Collapsed;
                 }, tooltip: "Perlin Noise: how much random wobble is added to the path. Default is 20.")
                 .AddDropdown("Mouse Curve", d =>
@@ -355,7 +360,6 @@ namespace Aimmy2.Controls
                     _mainWindow.AddDropdownItem(d, "Linear");
                     _mainWindow.AddDropdownItem(d, "Smooth/Legit");
                     _mainWindow.AddDropdownItem(d, "Aggressive");
-                    d.DropdownBox.SelectedIndex = 0;
                 }, tooltip: "Response curve for aim movement. Smooth/Legit = gentler and more human-like, Linear = unchanged, Aggressive = faster and snappier.")
                 .AddDropdown("Detection Area Type", d =>
                 {
@@ -387,8 +391,6 @@ namespace Aimmy2.Controls
                     _mainWindow.AddDropdownItem(d, "Best Confidence");
                     _mainWindow.AddDropdownItem(d, "Closest Distance");
                     _mainWindow.AddDropdownItem(d, "Closest Crosshair");
-                    d.DropdownBox.SelectedIndex = 0;
-                    Dictionary.dropdownState["Target Priority"] = "Best Confidence";
                 }, tooltip: "Best Confidence = highest AI score. Closest Distance = larger box first (near/big enemy before far/small). Closest Crosshair = the enemy nearest your crosshair wins. Best Confidence is usually best and reduces false positives.")
                 .AddDropdown("Aim Bone", d =>
                 {
@@ -398,8 +400,6 @@ namespace Aimmy2.Controls
                     _mainWindow.AddDropdownItem(d, "Torso");
                     _mainWindow.AddDropdownItem(d, "Leg");
                     _mainWindow.AddDropdownItem(d, "Custom Offsets");
-                    d.DropdownBox.SelectedIndex = 4;
-                    Dictionary.dropdownState["Aim Bone"] = "Custom Offsets";
                 }, tooltip: "Which body part to lock onto. Head/Neck/Torso/Leg aim at that part of the target box and keep tracking it as the target moves left/right. Custom Offsets uses Aiming Boundaries Alignment plus the manual X/Y Offset sliders instead.");
 
             // Add sliders with validation
@@ -560,12 +560,11 @@ namespace Aimmy2.Controls
                 .AddSlider("EMA Smoothening", "Amount", 0.01, 0.01, 0.01, 1, s =>
                 {
                     uiManager.S_EMASmoothing = s;
+                    // Push the value even while the toggle is off — the toggle always launches off, so
+                    // gating this here left smoothingFactor stuck on its hardcoded 0.5.
                     s.Slider.ValueChanged += (sender, e) =>
                     {
-                        if (Dictionary.toggleState["EMA Smoothening"])
-                        {
-                            MouseManager.smoothingFactor = s.Slider.Value;
-                        }
+                        MouseManager.smoothingFactor = s.Slider.Value;
                     };
                 }, tooltip: "How much smoothing to apply. Lower = smoother but slower, higher = faster but jittery.")
                 .AddSeparator();
@@ -958,12 +957,15 @@ namespace Aimmy2.Controls
 
             builder.AddDropdown("Tracer Position", d =>
             {
-                d.DropdownBox.SelectedIndex = 0;
+                d.DropdownBox.SelectedIndex = -1;  // Prevent auto-selection
                 uiManager.D_TracerPosition = d;
                 // Changed the positions of these as top is above middle & bottom - ts (this) bothered me so i had to
                 _mainWindow.AddDropdownItem(d, "Top");
                 _mainWindow.AddDropdownItem(d, "Middle");
                 _mainWindow.AddDropdownItem(d, "Bottom");
+                // Restore the saved position before wiring the handler below, otherwise the dropdown
+                // renders blank on launch and the overlay reload fires during startup.
+                SelectSavedDropdownItem(d, "Tracer Position");
                 d.DropdownBox.SelectionChanged += (s, e) =>
                 {
                     if (Dictionary.toggleState["Show Detected Player"])
@@ -1070,6 +1072,23 @@ namespace Aimmy2.Controls
             _mainWindow!.uiManager.D_MouseMovementMethod!.DropdownBox.SelectedIndex = 0;
         }
 
+        // Selects the item matching the loaded dropdownState value so a dropdown shows the saved
+        // setting instead of rendering blank or falling back to the first item.
+        private static void SelectSavedDropdownItem(ADropdown dropdown, string key)
+        {
+            if (!Dictionary.dropdownState.TryGetValue(key, out var saved)) return;
+
+            string? savedValue = saved?.ToString();
+            for (int i = 0; i < dropdown.DropdownBox.Items.Count; i++)
+            {
+                if ((dropdown.DropdownBox.Items[i] as ComboBoxItem)?.Content?.ToString() == savedValue)
+                {
+                    dropdown.DropdownBox.SelectedIndex = i;
+                    return;
+                }
+            }
+        }
+
         private void HandleColorChange(AColorChanger colorChanger, string settingKey, Action<Color> updateAction)
         {
             var colorDialog = new System.Windows.Forms.ColorDialog();
@@ -1129,9 +1148,9 @@ namespace Aimmy2.Controls
             }
 
             public SectionBuilder AddSlider(string title, string label, double frequency, double buttonSteps,
-                double min, double max, Action<ASlider>? configure = null, string? tooltip = null)
+                double min, double max, Action<ASlider>? configure = null, string? tooltip = null, string? displayTitle = null)
             {
-                var slider = _parent.CreateSlider(title, label, frequency, buttonSteps, min, max, tooltip);
+                var slider = _parent.CreateSlider(title, label, frequency, buttonSteps, min, max, tooltip, displayTitle);
                 configure?.Invoke(slider);
                 _panel.Children.Add(slider);
                 return this;
@@ -1230,10 +1249,11 @@ namespace Aimmy2.Controls
             return keyChanger;
         }
 
+        // title is the settings key; displayTitle overrides only the label shown to the user.
         private ASlider CreateSlider(string title, string label, double frequency, double buttonSteps,
-            double min, double max, string? tooltip = null)
+            double min, double max, string? tooltip = null, string? displayTitle = null)
         {
-            var slider = new ASlider(title, label, buttonSteps, tooltip)
+            var slider = new ASlider(displayTitle ?? title, label, buttonSteps, tooltip)
             {
                 Slider = { Minimum = min, Maximum = max, TickFrequency = frequency }
             };

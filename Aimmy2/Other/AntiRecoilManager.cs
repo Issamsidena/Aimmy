@@ -9,7 +9,9 @@ namespace Other
     public class AntiRecoilManager
     {
         private CancellationTokenSource? _antiRecoilCts;
-        private Task? _antiRecoilTask;
+        // A dedicated thread, not Task.Run: this loop raises its own priority, and doing that on a
+        // pooled thread leaked the elevated priority back into the thread pool for unrelated work.
+        private Thread? _antiRecoilThread;
         private readonly object _syncRoot = new();
         private long _holdStartTimestamp;
         private long _lastUpdateTimestamp;
@@ -23,13 +25,21 @@ namespace Other
         {
             lock (_syncRoot)
             {
-                if (_antiRecoilTask != null && !_antiRecoilTask.IsCompleted)
+                if (_antiRecoilThread != null && _antiRecoilThread.IsAlive)
                     return;
 
                 _holdStartTimestamp = Stopwatch.GetTimestamp();
                 _lastUpdateTimestamp = _holdStartTimestamp;
                 _antiRecoilCts = new CancellationTokenSource();
-                _antiRecoilTask = Task.Run(() => AntiRecoilLoop(_antiRecoilCts.Token), _antiRecoilCts.Token);
+
+                var token = _antiRecoilCts.Token;
+                _antiRecoilThread = new Thread(() => AntiRecoilLoop(token))
+                {
+                    IsBackground = true,
+                    Priority = ThreadPriority.AboveNormal,
+                    Name = "AntiRecoilLoop"
+                };
+                _antiRecoilThread.Start();
             }
         }
 
@@ -40,6 +50,9 @@ namespace Other
                 _antiRecoilCts?.Cancel();
                 _antiRecoilCts?.Dispose();
                 _antiRecoilCts = null;
+                // Clear the handle too. Leaving a completed thread here made Start()'s guard see a
+                // stale reference and return early, silently killing anti-recoil for the session.
+                _antiRecoilThread = null;
                 _holdStartTimestamp = 0;
                 _lastUpdateTimestamp = 0;
                 MouseManager.ResetAntiRecoilState();
@@ -50,7 +63,6 @@ namespace Other
         {
             try
             {
-                Thread.CurrentThread.Priority = ThreadPriority.Highest;
                 bool wasHolding = true;
 
                 while (!cancellationToken.IsCancellationRequested)
@@ -101,6 +113,17 @@ namespace Other
             catch (OperationCanceledException)
             {
                 // Normal shutdown path.
+            }
+            catch (Exception ex)
+            {
+                // Anything else used to end the loop permanently and silently -- anti-recoil simply
+                // stopped working for the rest of the session with no message.
+                LogManager.Log(LogManager.LogLevel.Error,
+                    $"Anti-Recoil stopped: {ex.Message}", true, 4000);
+            }
+            finally
+            {
+                MouseManager.ResetAntiRecoilState();
             }
         }
     }

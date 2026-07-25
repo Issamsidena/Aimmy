@@ -52,7 +52,20 @@ namespace Class
                 }
 
                 string json = JsonConvert.SerializeObject(SavedJSONSettings, Formatting.Indented);
-                File.WriteAllText(path, json);
+
+                // Write to a temporary file and swap it in, a crash while writing can never
+                // leave a half written config behind that way
+                string tempPath = path + ".tmp";
+                File.WriteAllText(tempPath, json);
+
+                if (File.Exists(path))
+                {
+                    File.Replace(tempPath, path, null);
+                }
+                else
+                {
+                    File.Move(tempPath, path);
+                }
             }
             catch (Exception ex)
             {
@@ -95,17 +108,55 @@ namespace Class
             }
             catch (Exception ex)
             {
-                // If there's an error loading, try to recreate the file with defaults
+                // Never overwrite the config with defaults, move the unreadable file aside so
+                // it can still be recovered by hand and leave the loaded settings alone
+                string message;
+
                 try
                 {
-                    WriteJSON(dictionary, path);
+                    if (File.Exists(path))
+                    {
+                        string backupPath = GetCorruptBackupPath(path);
+                        File.Move(path, backupPath);
+                        message = $"Could not read \"{Path.GetFileName(path)}\", it was backed up as \"{Path.GetFileName(backupPath)}\" and your current settings were kept.\n{ex.Message}";
+                    }
+                    else
+                    {
+                        message = $"Error loading \"{Path.GetFileName(path)}\":\n{ex.Message}";
+                    }
+                }
+                catch (Exception backupEx)
+                {
+                    message = $"Could not read \"{Path.GetFileName(path)}\" and backing it up failed as well:\n{backupEx.Message}";
+                }
+
+                try
+                {
+                    LogManager.Log(LogManager.LogLevel.Error, message, true, 8000);
                 }
                 catch
                 {
-                    // Only show error if we can't even create a default file
-                    MessageBox.Show("Error loading JSON, please note:\n" + ex.ToString());
+                    // Configs are loaded before the UI exists, the notification layer may not be up yet
                 }
             }
+        }
+
+        // Never overwrite an existing backup, pick the next free "<name>.corrupt-<n>.bak"
+        private static string GetCorruptBackupPath(string path)
+        {
+            string directory = Path.GetDirectoryName(path) ?? string.Empty;
+            string fileName = Path.GetFileName(path);
+
+            int backupIndex = 1;
+            string backupPath;
+
+            do
+            {
+                backupPath = Path.Combine(directory, $"{fileName}.corrupt-{backupIndex}.bak");
+                backupIndex++;
+            } while (File.Exists(backupPath));
+
+            return backupPath;
         }
     }
 }

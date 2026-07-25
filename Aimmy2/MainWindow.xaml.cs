@@ -255,6 +255,13 @@ namespace Aimmy2
             {
                 Dictionary.dropdownState["Target Class"] = "Smart Detection";
             }
+
+            // Older builds saved Target Priority as "Closest Detection" — that option is now "Closest Distance".
+            if (Dictionary.dropdownState.TryGetValue("Target Priority", out var tp)
+                && string.Equals(tp?.ToString(), "Closest Detection", StringComparison.Ordinal))
+            {
+                Dictionary.dropdownState["Target Priority"] = "Closest Distance";
+            }
         }
 
 
@@ -330,6 +337,28 @@ namespace Aimmy2
                 else
                 {
                     action(Convert.ToDouble(Dictionary.sliderSettings[key]));
+                }
+            }
+
+            // EMA runs on smoothingFactor, but the slider only pushes it on ValueChanged and the
+            // toggle always launches off, so seed it from the saved value here.
+            MouseManager.smoothingFactor = Convert.ToDouble(Dictionary.sliderSettings["EMA Smoothening"]);
+
+            // These toggles only apply their effect through Toggle_Action on click, so a saved-on
+            // toggle looked enabled but did nothing until it was clicked twice. Replay them here,
+            // after the windows and the AimMenu exist. The toggles AimMenuControl.Initialize already
+            // forces (Adaptive Recoil, Snap Lock, Sticky Aim, Anti Recoil Timeout) are not listed.
+            var startupToggles = new[]
+            {
+                "FOV", "Show Detected Player", "Show AI Confidence",
+                "UI TopMost", "StreamGuard", "Show Screen Capture"
+            };
+
+            foreach (var toggle in startupToggles)
+            {
+                if (Dictionary.toggleState.TryGetValue(toggle, out var enabled) && (bool)enabled)
+                {
+                    Toggle_Action(toggle);
                 }
             }
         }
@@ -1177,6 +1206,40 @@ namespace Aimmy2
                     ["Leg"] = 3,
                     ["Custom Offsets"] = 4
                 }),
+                (uiManager.D_MovementPath, "Movement Path", new Dictionary<string, int>
+                {
+                    ["None"] = 0,
+                    ["Cubic Bezier"] = 1,
+                    ["Exponential"] = 2,
+                    ["Straight"] = 3,
+                    ["Smoothstep"] = 4,
+                    ["Adaptive"] = 5,
+                    ["Perlin Noise"] = 6
+                }),
+                (uiManager.D_MouseCurve, "Mouse Curve", new Dictionary<string, int>
+                {
+                    ["Linear"] = 0,
+                    ["Smooth/Legit"] = 1,
+                    ["Aggressive"] = 2
+                }),
+                (uiManager.D_TargetPriority, "Target Priority", new Dictionary<string, int>
+                {
+                    ["Best Confidence"] = 0,
+                    ["Closest Distance"] = 1,
+                    ["Closest Crosshair"] = 2
+                }),
+                // Indexes follow the add order in AimMenuControl (Top, Middle, Bottom)
+                (uiManager.D_TracerPosition, "Tracer Position", new Dictionary<string, int>
+                {
+                    ["Top"] = 0,
+                    ["Middle"] = 1,
+                    ["Bottom"] = 2
+                }),
+                (uiManager.D_FOVSTYLE, "FOV Style", new Dictionary<string, int>
+                {
+                    ["Circle"] = 0,
+                    ["Rectangle"] = 1
+                }),
                 // SettingsMenu dropdowns
                 (uiManager.D_MouseMovementMethod, "Mouse Movement Method", new Dictionary<string, int>
                 {
@@ -1199,6 +1262,11 @@ namespace Aimmy2
                     ["320"] = 3,
                     ["256"] = 4,
                     ["160"] = 5
+                }),
+                // Model classes are added on top of this at runtime, so only the fixed entry is mapped
+                (uiManager.D_TargetClass, "Target Class", new Dictionary<string, int>
+                {
+                    ["Smart Detection"] = 0
                 }),
             };
 
@@ -1266,12 +1334,14 @@ namespace Aimmy2
 
         private void ApplyConfigToSliders()
         {
+            // Fallbacks must match Dictionary.sliderSettings, otherwise whichever path runs first wins.
             var sliderConfigs = new[]
             {
                 ("FOV Size", uiManager.S_FOVSize, 640.0),
+                ("Dynamic FOV Size", uiManager.S_DynamicFOVSize, 200),
                 ("Mouse Sensitivity (+/-)", uiManager.S_MouseSensitivity, 0.8),
                 ("Aim Strength", uiManager.S_AimStrength, 0.0),
-                ("Mouse Jitter", uiManager.S_MouseJitter, 0.0),
+                ("Mouse Jitter", uiManager.S_MouseJitter, 4),
                 ("Sticky Aim Threshold", uiManager.S_StickyAimThreshold, 50),
                 ("Approach Speed", uiManager.S_ApproachSpeed, 0.6),
                 ("Approach Threshold", uiManager.S_ApproachThreshold, 50),
@@ -1279,14 +1349,29 @@ namespace Aimmy2
                 ("EMA Smoothening", uiManager.S_EMASmoothing, 0.5),
                 ("Y Offset (Up/Down)", uiManager.S_YOffset, 0.0),
                 ("X Offset (Left/Right)", uiManager.S_XOffset, 0.0),
-                ("Y Offset (%)", uiManager.S_YOffsetPercent, 0.0),
-                ("X Offset (%)", uiManager.S_XOffsetPercent, 0.0),
-                ("Auto Trigger Delay", uiManager.S_AutoTriggerDelay, 0.25),
-                ("AI Minimum Confidence", uiManager.S_AIMinimumConfidence, 50.0),
+                ("Y Offset (%)", uiManager.S_YOffsetPercent, 50),
+                ("X Offset (%)", uiManager.S_XOffsetPercent, 50),
+                ("Auto Trigger Delay", uiManager.S_AutoTriggerDelay, 0.1),
+                ("Rapid Fire Delay", uiManager.S_RapidFireDelay, 50),
+                ("AI Minimum Confidence", uiManager.S_AIMinimumConfidence, 45),
                 ("Kalman Lead Time", uiManager.S_KalmanLeadTime, 0.10),
                 ("Kalman Smoothness", uiManager.S_KalmanSmoothness, 0.5),
                 ("WiseTheFox Lead Time", uiManager.S_WiseTheFoxLeadTime, 0.15),
-                ("Shalloe Lead Multiplier", uiManager.S_ShalloeLeadMultiplier, 3.0)
+                ("Shalloe Lead Multiplier", uiManager.S_ShalloeLeadMultiplier, 3.0),
+                // Movement Path per-curve tuning
+                ("Curve Strength", uiManager.S_CurveStrength, 0.0),
+                ("Exponent Strength", uiManager.S_ExponentStrength, 3.0),
+                ("Adaptation Strength", uiManager.S_AdaptationStrength, 100.0),
+                ("Noise Level", uiManager.S_NoiseLevel, 20.0),
+                // Anti Recoil per-axis timeouts
+                ("Timeout Y", uiManager.S_TimeoutY, 0.0),
+                ("Timeout X", uiManager.S_TimeoutX, 0.0),
+                // ESP appearance - these only reach the overlay through the slider's ValueChanged
+                ("AI Confidence Font Size", uiManager.S_DPFontSize, 20),
+                ("Corner Radius", uiManager.S_DPCornerRadius, 0),
+                ("Border Thickness", uiManager.S_DPBorderThickness, 1),
+                ("Opacity", uiManager.S_DPOpacity, 1),
+                ("AI FPS Limit", uiManager.S_AIFpsLimit, 0)
             };
 
             ApplySliderValues(sliderConfigs, Dictionary.sliderSettings);
@@ -1354,16 +1439,47 @@ namespace Aimmy2
                     ["Aggressive"] = 2
                 }),
 
+                // Indexes follow the add order in AimMenuControl (Top, Middle, Bottom). Inverting them
+                // made loading a config select the opposite tracer and write it back over the saved value.
                 ("Tracer Position", uiManager.D_TracerPosition, new Dictionary<string, int>
                 {
-                    ["Bottom"] = 0,
+                    ["Top"] = 0,
                     ["Middle"] = 1,
-                    ["Top"] = 2,
+                    ["Bottom"] = 2,
                 }),
 
                 ("Target Class", uiManager.D_TargetClass, new Dictionary<string, int>
                 {
                     ["Smart Detection"] = 0,
+                }),
+
+                ("Target Priority", uiManager.D_TargetPriority, new Dictionary<string, int>
+                {
+                    ["Best Confidence"] = 0,
+                    ["Closest Distance"] = 1,
+                    ["Closest Crosshair"] = 2
+                }),
+
+                ("Image Size", uiManager.D_ImageSize, new Dictionary<string, int>
+                {
+                    ["640"] = 0,
+                    ["512"] = 1,
+                    ["416"] = 2,
+                    ["320"] = 3,
+                    ["256"] = 4,
+                    ["160"] = 5
+                }),
+
+                ("Screen Capture Method", uiManager.D_ScreenCaptureMethod, new Dictionary<string, int>
+                {
+                    ["DirectX"] = 0,
+                    ["GDI+"] = 1
+                }),
+
+                ("FOV Style", uiManager.D_FOVSTYLE, new Dictionary<string, int>
+                {
+                    ["Circle"] = 0,
+                    ["Rectangle"] = 1
                 })
             };
 

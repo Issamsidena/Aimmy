@@ -1,4 +1,5 @@
 ﻿using Aimmy2.MouseMovementLibraries.GHubSupport.dist;
+using Other;
 using System.Runtime.InteropServices;
 
 namespace Aimmy2.MouseMovementLibraries.GHubSupport
@@ -7,6 +8,10 @@ namespace Aimmy2.MouseMovementLibraries.GHubSupport
     {
         private static nint Input = nint.Zero;
         private static Properties.IO_STATUS_BLOCK io = new();
+
+        // The driver device can be missing entirely (no LG HUB, wrong version, memory integrity on).
+        // Notify the user once per session and then degrade to a no-op instead of failing silently.
+        private static bool DriverUnavailableNotified = false;
 
         private const int FILE_SYNCHRONOUS_IO_NONALERT = 0x00000020;
         private const int FILE_NON_DIRECTORY_FILE = 0x00000040;
@@ -32,9 +37,11 @@ namespace Aimmy2.MouseMovementLibraries.GHubSupport
             for (int num = 9; num >= 0; num--)
             {
                 int Status = Initialize("\\??\\ROOT#SYSTEM#000" + num + "#{1abc05c0-c378-41b9-9cef-df1aba82b015}");
-                if (Status >= 0) break;
+                if (Status >= 0) return true;
             }
 
+            // Every attempt failed, so whatever NtCreateFile left in Input is not a usable handle.
+            Input = nint.Zero;
             return false;
         }
 
@@ -53,10 +60,16 @@ namespace Aimmy2.MouseMovementLibraries.GHubSupport
             return 0 == WinAPI.NtDeviceIoControlFile(Input, nint.Zero, nint.Zero, nint.Zero, ref block, 0x2a2010, ref buffer, Marshal.SizeOf(typeof(Struct.MOUSE_IO)), nint.Zero, 0);
         }
 
+        // MOUSE_IO stores X/Y/Wheel in a single byte each, but the driver reads them back as signed
+        // chars. Casting an int straight to byte wraps, so +150 would be delivered as -106 and the aim
+        // would snap the wrong way. Saturate to the representable signed range instead of wrapping.
+        private static byte ToSignedByte(int value) => unchecked((byte)(sbyte)Math.Clamp(value, sbyte.MinValue, sbyte.MaxValue));
+
         public static void Move(int button, int x, int y, int wheel)
         {
             if (Input == nint.Zero && !Open())
             {
+                NotifyDriverUnavailable();
                 return;
             }
 
@@ -64,9 +77,9 @@ namespace Aimmy2.MouseMovementLibraries.GHubSupport
             {
                 Unk1 = 0,
                 Button = (byte)button,
-                X = (byte)x,
-                Y = (byte)y,
-                Wheel = (byte)wheel
+                X = ToSignedByte(x),
+                Y = ToSignedByte(y),
+                Wheel = ToSignedByte(wheel)
             };
 
             if (Call(io)) return;
@@ -74,7 +87,22 @@ namespace Aimmy2.MouseMovementLibraries.GHubSupport
             Close();
             if (!Open())
             {
-                throw new InvalidOperationException("Failed to open the device.");
+                NotifyDriverUnavailable();
+            }
+        }
+
+        private static void NotifyDriverUnavailable()
+        {
+            if (DriverUnavailableNotified) return;
+            DriverUnavailableNotified = true;
+
+            try
+            {
+                LogManager.Log(LogManager.LogLevel.Error, "The LG HUB driver device could not be opened, mouse movement is disabled. Please try a different Mouse Movement Method.", true);
+            }
+            catch
+            {
+                // Notifying is best effort, it must never throw back into the AI loop.
             }
         }
     }

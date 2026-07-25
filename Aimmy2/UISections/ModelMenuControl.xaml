@@ -48,10 +48,9 @@
                                 BorderBrush="#3FFFFFFF"
                                 BorderThickness="1"
                                 Margin="0,55,0,54">
+                            <!-- Drag and drop is wired up in FileManager, do not add handlers here as well -->
                             <ListBox x:Name="ModelListBox"
                                      AllowDrop="True"
-                                     Drop="ModelListBox_Drop"
-                                     DragOver="ModelListBox_DragOver"
                                      Foreground="#DDFFFFFF"
                                      FontFamily="{StaticResource Atkinson Hyperlegible}"
                                      Margin="0"
@@ -127,10 +126,9 @@
                                 BorderBrush="#3FFFFFFF"
                                 BorderThickness="1"
                                 Margin="0,55,0,54">
+                            <!-- Drag and drop is wired up in FileManager, do not add handlers here as well -->
                             <ListBox x:Name="ConfigsListBox"
                                      AllowDrop="True"
-                                     Drop="ConfigsListBox_Drop"
-                                     DragOver="ConfigsListBox_DragOver"
                                      Foreground="#DDFFFFFF"
                                      FontFamily="{StaticResource Atkinson Hyperlegible}"
                                      Margin="0"

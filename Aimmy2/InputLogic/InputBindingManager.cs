@@ -1,4 +1,6 @@
 using Gma.System.MouseKeyHook;
+using System.Collections.Concurrent;
+using System.Runtime.InteropServices;
 using System.Threading;
 using System.Windows.Forms;
 
@@ -8,7 +10,15 @@ namespace InputLogic
     {
         private IKeyboardMouseEvents? _mEvents;
         private readonly Dictionary<string, string> bindings = [];
-        private static readonly Dictionary<string, bool> isHolding = [];
+
+        // Written on the hook thread, read lock-free from the aim loop, the anti-recoil loop and the
+        // rapid fire loop, so it has to be a concurrent collection rather than a plain Dictionary.
+        private static readonly ConcurrentDictionary<string, bool> isHolding = new();
+
+        // Virtual key code of the physical input that put each binding into the held state, so the
+        // stuck-key watchdog can re-check it against the real keyboard.
+        private static readonly ConcurrentDictionary<string, int> heldVirtualKeys = new();
+
         private string? settingBindingId = null;
 
         // The global hook runs on its own dedicated thread with its own message pump.
@@ -18,13 +28,94 @@ namespace InputLogic
         private readonly object _sync = new();
         private bool _hookStarted;
 
+        // The manager that owns the hook, so the watchdog can raise release events for the bindings it
+        // force-clears. There is only ever one (MainWindow holds it in a Lazy).
+        private static InputBindingManager? _active;
+
         public event Action<string, string>? OnBindingSet;
 
         public event Action<string>? OnBindingPressed;
 
         public event Action<string>? OnBindingReleased;
 
-        public static bool IsHoldingBinding(string bindingId) => isHolding.TryGetValue(bindingId, out bool holding) && holding;
+        #region Stuck key watchdog
+
+        // A low-level hook receives nothing while the secure desktop is up (UAC prompt, Ctrl-Alt-Del),
+        // and Windows silently detaches a hook that overruns LowLevelHooksTimeout. Either one can eat a
+        // key-UP and leave a binding held forever, with aim assist / anti-recoil / rapid fire running
+        // and no way to stop them. So re-check held bindings against the real keyboard every so often.
+        private const long WatchdogIntervalMs = 100;
+
+        private static long _lastWatchdogTick;
+
+        [DllImport("user32.dll")]
+        private static extern short GetAsyncKeyState(int vKey);
+
+        public static bool IsHoldingBinding(string bindingId)
+        {
+            if (!isHolding.TryGetValue(bindingId, out bool holding) || !holding)
+                return false;
+
+            // Only ever runs while something is held, and at most once per interval, because the aim
+            // loop polls this every frame.
+            ReconcileHeldBindings();
+
+            return isHolding.TryGetValue(bindingId, out holding) && holding;
+        }
+
+        private static void ReconcileHeldBindings()
+        {
+            long now = Environment.TickCount64;
+            long last = Interlocked.Read(ref _lastWatchdogTick);
+            if (now - last < WatchdogIntervalMs) return;
+            if (Interlocked.CompareExchange(ref _lastWatchdogTick, now, last) != last) return;
+
+            foreach (var held in isHolding)
+            {
+                if (!held.Value) continue;
+
+                if (!heldVirtualKeys.TryGetValue(held.Key, out int virtualKey)) continue;
+                if (virtualKey == 0) continue;                               // cannot be verified, leave it alone
+                if ((GetAsyncKeyState(virtualKey) & 0x8000) != 0) continue;  // still physically down
+
+                isHolding[held.Key] = false;
+                heldVirtualKeys.TryRemove(held.Key, out _);
+
+                // Let listeners know, the same way a real key-UP would have.
+                if (_active?.OnBindingReleased is Action<string> release)
+                {
+                    string releasedBinding = held.Key;
+                    RaiseOnUi(() => release(releasedBinding));
+                }
+            }
+        }
+
+        // Maps the hook's input name to a virtual key code. The two name spaces overlap -- "Left" is both
+        // MouseButtons.Left and Keys.Left (arrow) -- so which event it came from decides. 0 means
+        // "unknown", in which case the watchdog leaves that binding alone rather than guessing.
+        private static int GetVirtualKey(string input, bool fromMouse)
+        {
+            if (fromMouse)
+            {
+                return input switch
+                {
+                    "Left" => 0x01,      // VK_LBUTTON
+                    "Right" => 0x02,     // VK_RBUTTON
+                    "Middle" => 0x04,    // VK_MBUTTON
+                    "XButton1" => 0x05,  // VK_XBUTTON1
+                    "XButton2" => 0x06,  // VK_XBUTTON2
+                    _ => 0
+                };
+            }
+
+            if (!Enum.TryParse(input, out Keys key) || !Enum.IsDefined(typeof(Keys), key))
+                return 0;
+
+            int virtualKey = (int)key;
+            return virtualKey > 0 && virtualKey <= 0xFF ? virtualKey : 0;
+        }
+
+        #endregion
 
         // Rapid Fire injects synthetic mouse clicks. When its keybind is a mouse button (e.g. "Left"),
         // those clicks echo back through this global hook and would corrupt the hold state. We record
@@ -74,6 +165,7 @@ namespace InputLogic
             {
                 bindings[bindingId] = keyCode;
                 isHolding[bindingId] = false;
+                heldVirtualKeys.TryRemove(bindingId, out _);
             }
             OnBindingSet?.Invoke(bindingId, keyCode);
             EnsureHookEvents();
@@ -92,6 +184,7 @@ namespace InputLogic
         {
             lock (_sync)
             {
+                _active ??= this;
                 if (_hookStarted) return;
                 _hookStarted = true;
             }
@@ -125,18 +218,24 @@ namespace InputLogic
                 dispatcher.BeginInvoke(action);
         }
 
-        private void GlobalHookKeyDown(object sender, KeyEventArgs e) => HandleDown(e.KeyCode.ToString());
+        private void GlobalHookKeyDown(object sender, KeyEventArgs e) => HandleDown(e.KeyCode.ToString(), false);
 
-        private void GlobalHookMouseDown(object sender, MouseEventArgs e) => HandleDown(e.Button.ToString());
+        private void GlobalHookMouseDown(object sender, MouseEventArgs e) => HandleDown(e.Button.ToString(), true);
 
         private void GlobalHookKeyUp(object sender, KeyEventArgs e) => HandleUp(e.KeyCode.ToString());
 
         private void GlobalHookMouseUp(object sender, MouseEventArgs e) => HandleUp(e.Button.ToString());
 
-        private void HandleDown(string input)
+        private void HandleDown(string input, bool fromMouse)
         {
-            // Drop echoes from our own injected clicks (unless the user is rebinding a key right now).
-            if (settingBindingId == null && ConsumeInjectedEcho(input))
+            // Drop echoes from our own injected clicks. The echo is always consumed, even while the user
+            // is rebinding, so that this down stays paired with its up in the per-button queue -- skipping
+            // it here used to leave the queue one entry long forever and swallow the next real click.
+            bool isRebinding = settingBindingId != null;
+            bool isInjectedEcho = ConsumeInjectedEcho(input);
+
+            // While rebinding the input still has to come through so it can be captured as the binding.
+            if (isInjectedEcho && !isRebinding)
                 return;
 
             string? bindingToSet = null;
@@ -157,6 +256,7 @@ namespace InputLogic
                         if (binding.Value == input)
                         {
                             isHolding[binding.Key] = true;
+                            heldVirtualKeys[binding.Key] = GetVirtualKey(input, fromMouse);
                             pressed.Add(binding.Key);
                         }
                     }
@@ -188,6 +288,7 @@ namespace InputLogic
                     if (binding.Value == input)
                     {
                         isHolding[binding.Key] = false;
+                        heldVirtualKeys.TryRemove(binding.Key, out _);
                         released.Add(binding.Key);
                     }
                 }

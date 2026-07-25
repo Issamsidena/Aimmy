@@ -19,6 +19,16 @@ namespace Visuality
         private static ScreenCaptureWindow? _instance;
         private static Action? _onClosedByUser;
 
+        // Window.IsVisible is a DependencyProperty and can only be read on the UI thread, so the
+        // AI loop needs its own thread-safe view of whether the preview is actually on screen.
+        private static volatile bool _isShown;
+
+        // Only the newest frame is kept: the AI loop can outrun the UI thread, and queueing every
+        // frame on the dispatcher grows without bound while pinning a frozen bitmap per entry.
+        private readonly object _frameLock = new();
+        private BitmapSource? _pendingFrame;
+        private bool _renderQueued;
+
         private readonly Stopwatch _fpsStopwatch = Stopwatch.StartNew();
         private int _frameCount;
 
@@ -42,6 +52,7 @@ namespace Visuality
                 _instance.Closing += (s, e) =>
                 {
                     e.Cancel = true;
+                    _isShown = false;
                     _instance.Hide();
                     _onClosedByUser?.Invoke();
                 };
@@ -49,15 +60,22 @@ namespace Visuality
 
             _instance.Show();
             _instance.Activate();
+            _isShown = true;
         }
 
-        public static void HideWindow() => _instance?.Hide();
+        public static void HideWindow()
+        {
+            _isShown = false;
+            _instance?.Hide();
+        }
 
         /// <summary>Pushes a captured frame. Safe to call from the AI loop thread.</summary>
         public static void PushFrame(Bitmap bmp)
         {
             var inst = _instance;
-            if (inst == null) return;
+
+            // Nothing on screen -> do not pay for the pixel copy or the dispatcher hop at all.
+            if (inst == null || !_isShown) return;
 
             BitmapSource src;
             try
@@ -69,7 +87,42 @@ namespace Visuality
                 return;
             }
 
-            inst.Dispatcher.BeginInvoke(new Action(() => inst.ApplyFrame(src)));
+            inst.QueueFrame(src);
+        }
+
+        /// <summary>Replaces any frame the UI thread has not drawn yet, keeping at most one queued.</summary>
+        private void QueueFrame(BitmapSource src)
+        {
+            bool needsDispatch;
+
+            lock (_frameLock)
+            {
+                _pendingFrame = src; // drop the previous frame instead of queueing another one
+                needsDispatch = !_renderQueued;
+                _renderQueued = true;
+            }
+
+            if (needsDispatch)
+            {
+                Dispatcher.BeginInvoke(new Action(DrainPendingFrame));
+            }
+        }
+
+        private void DrainPendingFrame()
+        {
+            BitmapSource? src;
+
+            lock (_frameLock)
+            {
+                src = _pendingFrame;
+                _pendingFrame = null;
+                _renderQueued = false;
+            }
+
+            if (src != null)
+            {
+                ApplyFrame(src);
+            }
         }
 
         private void ApplyFrame(BitmapSource src)
@@ -89,19 +142,36 @@ namespace Visuality
             }
         }
 
+        /// <summary>
+        /// Copies the bitmap's pixels straight into a BitmapSource. The old implementation encoded the
+        /// frame to a BMP MemoryStream and decoded it again, allocating ~3 MiB of LOH buffers per frame.
+        /// </summary>
         private static BitmapSource ToBitmapSource(Bitmap bmp)
         {
-            using var ms = new MemoryStream();
-            bmp.Save(ms, ImageFormat.Bmp);
-            ms.Position = 0;
+            var rect = new Rectangle(0, 0, bmp.Width, bmp.Height);
+            BitmapData data = bmp.LockBits(rect, ImageLockMode.ReadOnly, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
 
-            var img = new BitmapImage();
-            img.BeginInit();
-            img.CacheOption = BitmapCacheOption.OnLoad;
-            img.StreamSource = ms;
-            img.EndInit();
-            img.Freeze(); // frozen => safe to hand to the UI thread
-            return img;
+            try
+            {
+                // Bgr32 (not Bgra32) keeps the preview opaque, matching how the BMP round-trip
+                // used to discard the alpha channel.
+                var src = BitmapSource.Create(
+                    data.Width,
+                    data.Height,
+                    96, 96,
+                    System.Windows.Media.PixelFormats.Bgr32,
+                    null,
+                    data.Scan0,
+                    data.Stride * data.Height,
+                    data.Stride);
+
+                src.Freeze(); // frozen => safe to hand to the UI thread
+                return src;
+            }
+            finally
+            {
+                bmp.UnlockBits(data);
+            }
         }
 
         private void Border_MouseLeftButtonDown(object sender, MouseButtonEventArgs e) => DragMove();

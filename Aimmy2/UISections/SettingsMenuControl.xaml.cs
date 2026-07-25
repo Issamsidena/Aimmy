@@ -235,7 +235,7 @@ namespace Aimmy2.Controls
                 }, tooltip: "Open the performance helper again for the currently loaded model.")
                 .AddDropdown("Target Class", d =>
                 {
-                    d.DropdownBox.SelectedIndex = 0;
+                    d.DropdownBox.SelectedIndex = -1;  // Prevent auto-selection that overwrites saved state
                     uiManager.D_TargetClass = d;
                     _mainWindow.AddDropdownItem(d, "Smart Detection");
                     UpdateTargetClassDropdown(d);
@@ -455,6 +455,14 @@ namespace Aimmy2.Controls
             _mainWindow!.uiManager.D_TargetClass!.Visibility = visibility;
 
             string? selection = (dropdown.DropdownBox.SelectedItem as ComboBoxItem)?.Content?.ToString();
+
+            // Nothing selected yet (first build) — fall back to the saved config value, otherwise the
+            // rebuild below drops to index 0 and rewrites Target Class to "Smart Detection".
+            if (string.IsNullOrEmpty(selection)
+                && Dictionary.dropdownState.TryGetValue("Target Class", out var savedClass))
+            {
+                selection = savedClass?.ToString();
+            }
 
             var removedItems = dropdown.DropdownBox.Items.Cast<ComboBoxItem>()
                 .Where(item => item.Content?.ToString() != "Smart Detection")

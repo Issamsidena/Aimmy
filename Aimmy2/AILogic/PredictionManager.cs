@@ -30,7 +30,10 @@ namespace AILogic
         private const double MEASUREMENT_NOISE = 8.0;           // Increased 4x (trust measurements less)
         private const double MAX_VELOCITY = 1000.0;               // Reduced max velocity
         private const double MIN_CONFIDENCE = 0.1;                // Minimum Kalman gain
-        private double VELOCITY_SMOOTHING = (double)Dictionary.sliderSettings["Kalman Smoothness"];
+        // Read live. As a field initializer this was evaluated ONCE when the filter was constructed
+        // (i.e. at model load), so moving the "Kalman Smoothness" slider did nothing all session.
+        private static double VELOCITY_SMOOTHING =>
+            Math.Clamp(Convert.ToDouble(Dictionary.sliderSettings["Kalman Smoothness"]), 0.0, 1.0);
         private const int DEADZONE_THRESHOLD = 1;                  // Don't move if prediction changes by less than 2 pixels
 
         public KalmanPrediction()
@@ -157,20 +160,20 @@ namespace AILogic
             double currentX = _x + _vx * dt;
             double currentY = _y + _vy * dt;
 
-            // Only predict if velocity is significant
+            // Ramp prediction in and out smoothly. Hard on/off at 10 px/s and a hard rescale at
+            // 100 px/s made the aim point POP between led and un-led whenever a target lingered near
+            // either boundary -- a visible stutter with no hysteresis to absorb it.
             double speed = Math.Sqrt(_vx * _vx + _vy * _vy);
-            double leadTime = 0;
+            double configuredLead = Convert.ToDouble(Dictionary.sliderSettings["Kalman Lead Time"]);
 
-            if (speed > 10) // Only predict if moving faster than 10 pixels/sec
-            {
-                leadTime = (double)Dictionary.sliderSettings["Kalman Lead Time"];
+            // Nothing below 10 px/s, easing to full lead by 40 px/s.
+            double engage = Math.Clamp((speed - 10.0) / 30.0, 0.0, 1.0);
+            engage = engage * engage * (3.0 - 2.0 * engage); // smoothstep
 
-                // Reduce lead time based on speed (less prediction for fast targets to prevent overshoot)
-                if (speed > 100)
-                {
-                    leadTime *= (100 / speed);
-                }
-            }
+            // Taper back down for fast targets so we do not lead past them.
+            double taper = speed <= 100.0 ? 1.0 : 100.0 / speed;
+
+            double leadTime = configuredLead * engage * taper;
 
             // Predict future position
             int predictedX = (int)(currentX + _vx * leadTime);

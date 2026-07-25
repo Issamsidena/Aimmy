@@ -58,23 +58,29 @@ namespace Aimmy2.Class
         /// </summary>
         public static void Initialize()
         {
+            DisplayChangedEventArgs? pending = null;
+
             lock (_lockObject)
             {
                 if (_initialized) return;
 
 
                 // Refresh displays first
-                RefreshDisplays();
+                bool changed = RefreshDisplaysCore() != null;
 
                 // Load saved display preference
-                LoadSavedDisplay();
+                changed |= LoadSavedDisplayCore() != null;
 
                 // Set up monitor change detection
                 SystemEvents.DisplaySettingsChanged += OnDisplaySettingsChanged;
 
                 _initialized = true;
 
+                pending = changed ? BuildDisplayChangedArgs() : null;
             }
+
+            // Raised with the lock released - see RaiseDisplayChanged.
+            RaiseDisplayChanged(pending);
         }
 
         /// <summary>
@@ -91,12 +97,21 @@ namespace Aimmy2.Class
 
         public static void ForceRefresh()
         {
+            DisplayChangedEventArgs? pending;
+
             lock (_lockObject)
             {
-                RefreshDisplays();
-                LoadSavedDisplay();
-                ForceUpdateWindows();
+                bool changed = RefreshDisplaysCore() != null;
+                changed |= LoadSavedDisplayCore() != null;
+
+                pending = changed ? BuildDisplayChangedArgs() : null;
             }
+
+            // MUST run with the lock released: subscribers and ForceUpdateWindows block on the UI
+            // thread, and the repositioning code reads the geometry properties above, which take
+            // _lockObject. Doing either inside the lock is a hard deadlock on monitor hot-plug.
+            RaiseDisplayChanged(pending);
+            ForceUpdateWindows();
         }
 
         /// <summary>
@@ -104,37 +119,52 @@ namespace Aimmy2.Class
         /// </summary>
         public static void RefreshDisplays()
         {
+            DisplayChangedEventArgs? pending;
+
             lock (_lockObject)
             {
-                var oldDisplayCount = _displays.Count;
-                var oldCurrentIndex = _currentDisplayIndex;
-
-                _displays = MonitorHelper.GetMonitors();
-
-                for (int i = 0; i < _displays.Count; i++)
-                {
-                    var d = _displays[i];
-                }
-
-                // Handle case where displays were removed
-                if (_currentDisplayIndex >= _displays.Count)
-                {
-                    _currentDisplayIndex = _displays.FindIndex(d => d.IsPrimary);
-                    if (_currentDisplayIndex == -1 && _displays.Count > 0)
-                        _currentDisplayIndex = 0;
-                }
-
-                // Update current display reference
-                _currentDisplay = _currentDisplayIndex >= 0 && _currentDisplayIndex < _displays.Count
-                    ? _displays[_currentDisplayIndex]
-                    : null;
-
-                // Always notify if displays changed or current display index changed
-                if (_displays.Count != oldDisplayCount || _currentDisplayIndex != oldCurrentIndex)
-                {
-                    NotifyDisplayChanged();
-                }
+                pending = RefreshDisplaysCore();
             }
+
+            RaiseDisplayChanged(pending);
+        }
+
+        /// <summary>
+        /// Refresh worker. Must be called with <see cref="_lockObject"/> held; returns the
+        /// notification that the caller has to raise AFTER releasing the lock (or null for none).
+        /// </summary>
+        private static DisplayChangedEventArgs? RefreshDisplaysCore()
+        {
+            var oldDisplayCount = _displays.Count;
+            var oldCurrentIndex = _currentDisplayIndex;
+
+            _displays = MonitorHelper.GetMonitors();
+
+            for (int i = 0; i < _displays.Count; i++)
+            {
+                var d = _displays[i];
+            }
+
+            // Handle case where displays were removed
+            if (_currentDisplayIndex >= _displays.Count)
+            {
+                _currentDisplayIndex = _displays.FindIndex(d => d.IsPrimary);
+                if (_currentDisplayIndex == -1 && _displays.Count > 0)
+                    _currentDisplayIndex = 0;
+            }
+
+            // Update current display reference
+            _currentDisplay = _currentDisplayIndex >= 0 && _currentDisplayIndex < _displays.Count
+                ? _displays[_currentDisplayIndex]
+                : null;
+
+            // Always notify if displays changed or current display index changed
+            if (_displays.Count != oldDisplayCount || _currentDisplayIndex != oldCurrentIndex)
+            {
+                return BuildDisplayChangedArgs();
+            }
+
+            return null;
         }
 
         /// <summary>
@@ -142,6 +172,8 @@ namespace Aimmy2.Class
         /// </summary>
         public static bool SetDisplay(int displayIndex)
         {
+            DisplayChangedEventArgs? pending;
+
             lock (_lockObject)
             {
                 if (displayIndex < 0 || displayIndex >= _displays.Count)
@@ -159,27 +191,41 @@ namespace Aimmy2.Class
 
                 // Always notify about display change, even if same index
                 // This ensures any new windows get positioned correctly
-                NotifyDisplayChanged();
-
-                return true;
+                pending = BuildDisplayChangedArgs();
             }
+
+            RaiseDisplayChanged(pending);
+
+            return true;
         }
 
         /// <summary>
-        /// Notify subscribers of display change
+        /// Build the change notification for the current display.
+        /// Must be called with <see cref="_lockObject"/> held.
         /// </summary>
-        private static void NotifyDisplayChanged()
+        private static DisplayChangedEventArgs? BuildDisplayChangedArgs()
         {
-            if (_currentDisplay != null)
+            if (_currentDisplay == null) return null;
+
+            return new DisplayChangedEventArgs
             {
-                DisplayChanged?.Invoke(null, new DisplayChangedEventArgs
-                {
-                    DisplayIndex = _currentDisplayIndex,
-                    DisplayInfo = _currentDisplay,
-                    Bounds = _currentDisplay.Bounds,
-                    WorkingArea = _currentDisplay.WorkingArea
-                });
-            }
+                DisplayIndex = _currentDisplayIndex,
+                DisplayInfo = _currentDisplay,
+                Bounds = _currentDisplay.Bounds,
+                WorkingArea = _currentDisplay.WorkingArea
+            };
+        }
+
+        /// <summary>
+        /// Notify subscribers of display change.
+        /// MUST be called with <see cref="_lockObject"/> released - subscribers marshal onto the UI
+        /// thread with a blocking Invoke and the UI thread reads the lock-protected geometry properties.
+        /// </summary>
+        private static void RaiseDisplayChanged(DisplayChangedEventArgs? args)
+        {
+            if (args == null) return;
+
+            DisplayChanged?.Invoke(null, args);
         }
 
         /// <summary>
@@ -270,72 +316,109 @@ namespace Aimmy2.Class
         /// </summary>
         public static void LoadSavedDisplay()
         {
+            DisplayChangedEventArgs? pending;
+
             lock (_lockObject)
             {
-                // Ensure displays are detected
-                if (_displays.Count == 0)
-                {
-                    RefreshDisplays();
-                }
-
-                if (Dictionary.sliderSettings.TryGetValue("SelectedDisplay", out var saved))
-                {
-                    var savedIndex = (int)saved;
-                    if (savedIndex >= 0 && savedIndex < _displays.Count)
-                    {
-                        _currentDisplayIndex = savedIndex;
-                        _currentDisplay = _displays[savedIndex];
-                        return;
-                    }
-                }
-
-                // Default to primary display
-                var primaryIndex = _displays.FindIndex(d => d.IsPrimary);
-                if (primaryIndex >= 0)
-                {
-                    _currentDisplayIndex = primaryIndex;
-                    _currentDisplay = _displays[primaryIndex];
-                }
-                else if (_displays.Count > 0)
-                {
-                    _currentDisplayIndex = 0;
-                    _currentDisplay = _displays[0];
-                }
+                pending = LoadSavedDisplayCore();
             }
+
+            RaiseDisplayChanged(pending);
         }
 
         /// <summary>
-        /// Force update positions of overlay windows if they exist
+        /// Load worker. Must be called with <see cref="_lockObject"/> held; returns the notification
+        /// that the caller has to raise AFTER releasing the lock (or null for none).
+        /// </summary>
+        private static DisplayChangedEventArgs? LoadSavedDisplayCore()
+        {
+            DisplayChangedEventArgs? pending = null;
+
+            // Ensure displays are detected
+            if (_displays.Count == 0)
+            {
+                pending = RefreshDisplaysCore();
+            }
+
+            if (Dictionary.sliderSettings.TryGetValue("SelectedDisplay", out var saved))
+            {
+                // "saved" is dynamic and comes straight from the config file - a hard (int) cast
+                // on a bad value throws and takes application startup down with it.
+                int savedIndex = -1;
+                try
+                {
+                    object? savedValue = saved;
+                    if (savedValue != null)
+                        savedIndex = Convert.ToInt32(savedValue);
+                }
+                catch (Exception ex)
+                {
+                    savedIndex = -1;
+                    global::Other.LogManager.Log(global::Other.LogManager.LogLevel.Warning, $"Invalid \"SelectedDisplay\" value in the config; falling back to the primary display. {ex.Message}");
+                }
+
+                if (savedIndex >= 0 && savedIndex < _displays.Count)
+                {
+                    _currentDisplayIndex = savedIndex;
+                    _currentDisplay = _displays[savedIndex];
+                    return pending;
+                }
+            }
+
+            // Default to primary display
+            var primaryIndex = _displays.FindIndex(d => d.IsPrimary);
+            if (primaryIndex >= 0)
+            {
+                _currentDisplayIndex = primaryIndex;
+                _currentDisplay = _displays[primaryIndex];
+            }
+            else if (_displays.Count > 0)
+            {
+                _currentDisplayIndex = 0;
+                _currentDisplay = _displays[0];
+            }
+
+            return pending;
+        }
+
+        /// <summary>
+        /// Force update positions of overlay windows if they exist.
+        /// NEVER call this while holding <see cref="_lockObject"/> - it marshals onto the UI thread,
+        /// and the repositioning code reads the geometry properties that take the same lock.
         /// </summary>
         public static void ForceUpdateWindows()
         {
+            // Application.Current is null once the app has shut down.
+            var app = Application.Current;
+            if (app == null) return;
+
+            // Snapshot the windows so nothing is read while another thread swaps them out.
+            var fovWindow = Dictionary.FOVWindow;
+            var detectedPlayerOverlay = Dictionary.DetectedPlayerOverlay;
+
             // Check if windows exist and force them to reposition
-            try
+            if (fovWindow != null)
             {
-                if (Dictionary.FOVWindow != null)
+                try
                 {
-                    Application.Current.Dispatcher.Invoke(() =>
-                    {
-                        Dictionary.FOVWindow.ForceReposition();
-                    });
+                    app.Dispatcher.Invoke(() => fovWindow!.ForceReposition());
                 }
-            }
-            catch (Exception ex)
-            {
+                catch (Exception ex)
+                {
+                    global::Other.LogManager.Log(global::Other.LogManager.LogLevel.Error, $"Failed to reposition the FOV window after a display change: {ex.Message}");
+                }
             }
 
-            try
+            if (detectedPlayerOverlay != null)
             {
-                if (Dictionary.DetectedPlayerOverlay != null)
+                try
                 {
-                    Application.Current.Dispatcher.Invoke(() =>
-                    {
-                        Dictionary.DetectedPlayerOverlay.ForceReposition();
-                    });
+                    app.Dispatcher.Invoke(() => detectedPlayerOverlay!.ForceReposition());
                 }
-            }
-            catch (Exception ex)
-            {
+                catch (Exception ex)
+                {
+                    global::Other.LogManager.Log(global::Other.LogManager.LogLevel.Error, $"Failed to reposition the detected player overlay after a display change: {ex.Message}");
+                }
             }
         }
 

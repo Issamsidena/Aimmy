@@ -28,6 +28,9 @@ namespace Aimmy2.Class
         public static Dictionary<string, dynamic> sliderSettings = new()
         {
             { "Suggested Model", ""},
+            // DisplayManager writes the chosen monitor here; the loader is strict, so it needs a
+            // default entry or the saved selection is dropped and the display reverts to primary.
+            { "SelectedDisplay", 0 },
             { "FOV Size", 640 },
             { "Dynamic FOV Size", 200 },
             { "Mouse Sensitivity (+/-)", 0.80 },
@@ -84,7 +87,6 @@ namespace Aimmy2.Class
             { "FOV", false },
             { "Dynamic FOV", false },
             { "Third Person Support", false },
-            { "Masking", false },
             { "Show Detected Player", false },
             { "Cursor Check", false },
             { "Spray Mode", false },
@@ -93,12 +95,10 @@ namespace Aimmy2.Class
             { "Anti Recoil Timeout", false },
             { "Adaptive Recoil", false },
             { "Enable Gun Switching Keybind", false },
-            { "Show FOV", true },
             { "Show AI Confidence", false },
             { "Show Tracers", false },
             { "Collect Data While Playing", false },
             { "Auto Label Data", false },
-            { "LG HUB Mouse Movement", false },
             { "Mouse Background Effect", true },
             { "Debug Mode", false },
             { "UI TopMost", false },
@@ -123,7 +123,6 @@ namespace Aimmy2.Class
             { "ESP Config", false },
             { "Model Settings", false },
             { "Settings Menu", false },
-            { "X/Y Percentage Adjustment", false },
             { "Theme Settings", false },
             { "Screen Settings", false}
         };
@@ -135,6 +134,7 @@ namespace Aimmy2.Class
             { "Aiming Boundaries Alignment", "Center" },
             { "Mouse Movement Method", "Mouse Event" },
             { "Screen Capture Method", "DirectX" },
+            { "FOV Style", "Circle" },
             { "Tracer Position", "Bottom" },
             { "Movement Path", "None" },
             { "Mouse Curve", "Linear" },
@@ -164,8 +164,10 @@ namespace Aimmy2.Class
 
         public static Dictionary<string, dynamic> AntiRecoilSettings = new()
         {
-            { "Hold Time", 1.0 },
-            { "Fire Rate", 1.0 },
+            // Fire Rate is in ms and 100 is neutral for the timing multiplier, so a 1.0 default
+            // pinned anti recoil at its 10x ceiling. These match BindAntiRecoilSlider's fallbacks.
+            { "Hold Time", 10.0 },
+            { "Fire Rate", 200.0 },
             { "Y Recoil (Up/Down)", 0.00 },
             { "X Recoil (Left/Right)", 0.00 },
             { "Adaptive Recoil", false },
